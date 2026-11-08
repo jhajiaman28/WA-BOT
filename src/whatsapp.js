@@ -98,89 +98,103 @@ async function startWhatsApp() {
 
   sock.ev.on('messages.upsert', async ({ messages }) => {
     for (const msg of messages) {
-      if (!msg.message || state.sentMsgIds.has(msg.key.id)) continue;
-      if (msg.message.pollCreationMessage || msg.message.pollCreationMessageV3) {
-        messageStore.set(msg.key.id, msg);
+      try {
+        if (!msg.message || state.sentMsgIds.has(msg.key.id)) continue;
+        if (msg.message.pollCreationMessage || msg.message.pollCreationMessageV3) {
+          messageStore.set(msg.key.id, msg);
+        }
+
+        const text = msg.message.conversation
+          || msg.message.extendedTextMessage?.text
+          || msg.message.editedMessage?.message?.protocolMessage?.editedMessage?.conversation
+          || '';
+        if (!text) continue;
+
+        const chatJid = msg.key.remoteJid;
+        const senderJid = msg.key.fromMe ? sock.user?.id : (msg.key.participant || chatJid);
+        const quotedId = msg.message.extendedTextMessage?.contextInfo?.stanzaId || null;
+
+        await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll });
+      } catch (err) {
+        console.error('[WA Message Error]', err);
+        await sendControlMsg(`⚠️ Error: ${err.message}`).catch(() => {});
       }
-
-      const text = msg.message.conversation
-        || msg.message.extendedTextMessage?.text
-        || msg.message.editedMessage?.message?.protocolMessage?.editedMessage?.conversation
-        || '';
-      if (!text) continue;
-
-      const chatJid = msg.key.remoteJid;
-      const senderJid = msg.key.fromMe ? sock.user?.id : (msg.key.participant || chatJid);
-      const quotedId = msg.message.extendedTextMessage?.contextInfo?.stanzaId || null;
-
-      await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll });
     }
   });
 
   sock.ev.on('messages.update', async (updates) => {
     for (const { key, update } of updates) {
-      if (update.pollUpdates) {
-        const poll = state.activePolls.get(key.id);
-        if (!poll) continue;
-        const pollMsg = messageStore.get(key.id);
-        const agg = getAggregateVotesInPollMessage({
-          message: pollMsg?.message || { pollCreationMessageV3: { options: poll.options.map((o) => ({ optionName: o })) } },
-          pollUpdates: update.pollUpdates,
-        });
+      try {
+        if (update.pollUpdates) {
+          const poll = state.activePolls.get(key.id);
+          if (!poll) continue;
+          const pollMsg = messageStore.get(key.id);
+          const agg = getAggregateVotesInPollMessage({
+            message: pollMsg?.message || { pollCreationMessageV3: { options: poll.options.map((o) => ({ optionName: o })) } },
+            pollUpdates: update.pollUpdates,
+          });
 
-        for (const u of update.pollUpdates) {
-          const voterJid = u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid;
-          const votedOption = agg.find((a) => a.voters.includes(voterJid))?.name;
-          if (votedOption) {
-            await gita.handleVote({ poll, voterJid, pushName: '', selectedOptions: [votedOption], sendControlMsg });
+          for (const u of update.pollUpdates) {
+            const voterJid = u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid;
+            const votedOption = agg.find((a) => a.voters.includes(voterJid))?.name;
+            if (votedOption) {
+              await gita.handleVote({ poll, voterJid, pushName: '', selectedOptions: [votedOption], sendControlMsg });
+            }
           }
         }
-      }
 
-      const editedText = update.message?.editedMessage?.message?.conversation
-        || update.message?.editedMessage?.message?.extendedTextMessage?.text;
-      if (editedText && !state.sentMsgIds.has(key.id)) {
-        const senderJid = key.fromMe ? sock.user?.id : (key.participant || key.remoteJid);
-        await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll });
+        const editedText = update.message?.editedMessage?.message?.conversation
+          || update.message?.editedMessage?.message?.extendedTextMessage?.text;
+        if (editedText && !state.sentMsgIds.has(key.id)) {
+          const senderJid = key.fromMe ? sock.user?.id : (key.participant || key.remoteJid);
+          await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll });
+        }
+      } catch (err) {
+        console.error('[WA Update Error]', err);
+        await sendControlMsg(`⚠️ Update Error: ${err.message}`).catch(() => {});
       }
     }
   });
 
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
-    const binding = state.bindings.find((b) => b.groupJid === id && b.trackJoins);
-    if (!binding) return;
+    try {
+      const binding = state.bindings.find((b) => b.groupJid === id && b.trackJoins);
+      if (!binding) return;
 
-    for (const p of participants) {
-      if (action === 'add') {
-        const msg = await sendControlMsg(
-          `👋 *New Member Joined* *${binding.groupName}* (\`${p}\`).\nQuote-reply with their official short name to add alphabetically to *${binding.targetTab}*, or reply *Skip*.`
-        );
-        if (msg?.key?.id) {
-          const isLid = p.endsWith('@lid');
-          state.pendingPrompts.set(msg.key.id, {
-            type: 'CONFIRM_JOIN',
-            binding,
-            phoneJid: isLid ? '' : p,
-            lid: isLid ? p : '',
-          });
-        }
-      } else if (action === 'remove' || action === 'leave') {
-        const existing = state.members.find((m) => m.groupKey === binding.bindKey && (m.phoneJid === p || m.lid === p));
-        const memberName = existing?.officialName || p;
-        const msg = await sendControlMsg(
-          `🚪 *Member ${action === 'remove' ? 'Removed' : 'Left'}* *${binding.groupName}*: *${memberName}*.\nQuote-reply *Yes* to confirm exit log or *No* to skip.`
-        );
-        if (msg?.key?.id) {
-          state.pendingPrompts.set(msg.key.id, {
-            type: 'CONFIRM_EXIT',
-            groupName: binding.groupName,
-            groupJid: id,
-            memberName,
-            phoneJid: p,
-            action,
-          });
+      for (const p of participants) {
+        if (action === 'add') {
+          const msg = await sendControlMsg(
+            `👋 *New Member Joined* *${binding.groupName}* (\`${p}\`).\nQuote-reply with their official short name to add alphabetically to *${binding.targetTab}*, or reply *Skip*.`
+          );
+          if (msg?.key?.id) {
+            const isLid = p.endsWith('@lid');
+            state.pendingPrompts.set(msg.key.id, {
+              type: 'CONFIRM_JOIN',
+              binding,
+              phoneJid: isLid ? '' : p,
+              lid: isLid ? p : '',
+            });
+          }
+        } else if (action === 'remove' || action === 'leave') {
+          const existing = state.members.find((m) => m.groupKey === binding.bindKey && (m.phoneJid === p || m.lid === p));
+          const memberName = existing?.officialName || p;
+          const msg = await sendControlMsg(
+            `🚪 *Member ${action === 'remove' ? 'Removed' : 'Left'}* *${binding.groupName}*: *${memberName}*.\nQuote-reply *Yes* to confirm exit log or *No* to skip.`
+          );
+          if (msg?.key?.id) {
+            state.pendingPrompts.set(msg.key.id, {
+              type: 'CONFIRM_EXIT',
+              groupName: binding.groupName,
+              groupJid: id,
+              memberName,
+              phoneJid: p,
+              action,
+            });
+          }
         }
       }
+    } catch (err) {
+      console.error('[WA Group Update Error]', err);
     }
   });
 }
