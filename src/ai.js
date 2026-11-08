@@ -4,26 +4,37 @@ const { state, pushChatHistory, isFullAuthority } = require('./state');
 
 let genAI = null;
 
-function getModel() {
+const CANDIDATE_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-pro-preview',
+  'gemini-3-flash',
+];
+
+async function generateWithFallback(prompt) {
   if (!GEMINI_API_KEY) throw new Error('Missing GEMINI_API_KEY');
   if (!genAI) genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  return genAI.getGenerativeModel({ 
-    CANDIDATE_MODELS = [
-        "gemini-3.8-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-pro-preview",
-        "gemini-3-flash"
-    ] });
+
+  let lastErr;
+  for (const modelName of CANDIDATE_MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const res = await model.generateContent(prompt);
+      return res.response.text().trim();
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 async function generateTauntOption(sessionName) {
   if (!GEMINI_API_KEY) return '😒Not Interested';
   try {
-    const model = getModel();
-    const res = await model.generateContent(
+    const raw = await generateWithFallback(
       `Generate ONE short, witty, light-hearted Hindi/Hinglish or English WhatsApp poll option (max 28 chars, starting with 1 emoji) teasing someone for skipping today's "${sessionName}" session. Return ONLY the option text.`
     );
-    const text = res.response.text().trim().replace(/["\n]/g, '');
+    const text = raw.replace(/["\n]/g, '');
     return text.slice(0, 35) || '😒Not Interested';
   } catch {
     return '😒Not Interested';
@@ -47,14 +58,12 @@ If the user asks to perform a supported action and has authority, respond with a
 If the user is just conversing or asking a question, reply concisely in plain text. Keep responses strictly in English.`;
 
   try {
-    const model = getModel();
     const prompt = [
       systemContext,
       ...history.map((h) => `${h.role === 'user' ? 'User' : 'Bot'}: ${h.text}`),
     ].join('\n');
 
-    const result = await model.generateContent(prompt);
-    const reply = result.response.text().trim();
+    const reply = await generateWithFallback(prompt);
     pushChatHistory(chatJid, 'assistant', reply);
     return reply;
   } catch (err) {
