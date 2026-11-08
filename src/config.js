@@ -13,7 +13,7 @@ function formatISTDate(date = getISTNow()) {
   return `${d}/${m}/${y}`;
 }
 
-function formatISTTimestamp(date = getISTNow()) {
+function formatISTTimestamp(date = new Date()) {
   return date.toLocaleString('en-IN', { timeZone: TZ, hour12: true });
 }
 
