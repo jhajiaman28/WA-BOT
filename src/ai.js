@@ -7,7 +7,13 @@ let genAI = null;
 function getModel() {
   if (!GEMINI_API_KEY) throw new Error('Missing GEMINI_API_KEY');
   if (!genAI) genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  return genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  return genAI.getGenerativeModel({ 
+    CANDIDATE_MODELS = [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash"
+    ] });
 }
 
 async function generateTauntOption(sessionName) {
