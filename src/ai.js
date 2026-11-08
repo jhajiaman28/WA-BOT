@@ -3,6 +3,7 @@ const { GEMINI_API_KEY } = require('./config');
 const { state, pushChatHistory, isFullAuthority } = require('./state');
 
 let genAI = null;
+let workingModel = null;
 
 const CANDIDATE_MODELS = [
   'gemini-3.8-flash',
@@ -15,11 +16,16 @@ async function generateWithFallback(prompt) {
   if (!GEMINI_API_KEY) throw new Error('Missing GEMINI_API_KEY');
   if (!genAI) genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
+  const models = workingModel
+    ? [workingModel, ...CANDIDATE_MODELS.filter((m) => m !== workingModel)]
+    : CANDIDATE_MODELS;
+
   let lastErr;
-  for (const modelName of CANDIDATE_MODELS) {
+  for (const modelName of models) {
     try {
       const model = genAI.getGenerativeModel({ model: modelName });
       const res = await model.generateContent(prompt);
+      workingModel = modelName;
       return res.response.text().trim();
     } catch (err) {
       lastErr = err;
@@ -32,7 +38,12 @@ async function generateTauntOption(sessionName) {
   if (!GEMINI_API_KEY) return '😒Not Interested';
   try {
     const raw = await generateWithFallback(
-      `Generate ONE short, witty, light-hearted Hindi/Hinglish or English WhatsApp poll option (max 28 chars, starting with 1 emoji) teasing someone for skipping today's "${sessionName}" session. Return ONLY the option text.`
+      `Generate ONE short, witty, self-deprecating WhatsApp poll option (max 28 chars, starting with 1 emoji) for someone who skipped today's "${sessionName}" session.
+Rules:
+- Must be written in FIRST PERSON (the voter playfully describing themselves, e.g., "🤡Jhunnuram Mode", "🫏Aaj Gadahva bana", "😒Not Interested").
+- May playfully use Acharya Prashant community terms like "Jhunnuram", "Gadahva", "Maya me phansa".
+- NEVER be rude or disrespectful, and NEVER use "tum" (if addressing anyone, only use respectful "aap").
+Return ONLY the option text.`
     );
     const text = raw.replace(/["\n]/g, '');
     return text.slice(0, 35) || '😒Not Interested';
@@ -54,8 +65,7 @@ async function handleAIConversation({ chatJid, senderJid, text, sendControlMsg }
 Current Authority: ${fullAuth ? 'FULL_AUTHORITY' : 'LIMITED_OPERATOR'}.
 Known Group Bindings: ${JSON.stringify(state.bindings.map((b) => ({ key: b.bindKey, name: b.groupName, jid: b.groupJid })))}.
 Settings: ${JSON.stringify(state.settings)}.
-If the user asks to perform a supported action and has authority, respond with a JSON block inside \`\`\`json ... \`\`\` with {"action": "SYNC"|"PAUSE_POLLS"|"RESUME_POLLS"|"STATUS"|"NONE", "reply": "short confirmation"}.
-If the user is just conversing or asking a question, reply concisely in plain text. Keep responses strictly in English.`;
+Always maintain a respectful tone (never use "tum" if using Hindi/Hinglish—only use "aap"). Keep responses strictly in English unless quoting a specific Hindi/Hinglish term.`;
 
   try {
     const prompt = [
