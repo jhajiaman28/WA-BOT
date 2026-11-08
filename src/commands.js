@@ -11,7 +11,7 @@ const HELP_TEXT = `*Bot Commands*
 • \`#set_control_group\` — Set this group as Control Group
 • \`#find [keyword|all]\` — Search WhatsApp groups
 • \`#bind <#> <bindKey>\` — Bind group from last search
-• \`#gita [DD/MM/YY] [Session]\` — Send Gita poll (optional overrides)
+• \`#gita [test] [DD/MM/YY] [Session]\` — Send Gita poll (use \`test\` to send here)
 • \`#listen [15m|5|forever]\` — Enable chat listening
 • \`#stop\` — Stop active listener & notify
 • \`#pause_polls\` / \`#resume_polls\` — Pause/resume scheduled polls
@@ -174,13 +174,11 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
   const isControlGroup = controlJid && chatJid === controlJid;
   const isCommand = text.trim().startsWith('#');
 
-  // Check quote-reply first in Control Group
   if (isControlGroup && quotedId && isAuthorized(senderJid, 'CONTROL')) {
     const handled = await handleQuoteReply({ quotedId, replyText: text, sendControlMsg, enqueuePoll });
     if (handled) return;
   }
 
-  //Bootstrap #set_control_group before controlJid is set
   if (text.trim().toLowerCase() === '#set_control_group' && isFullAuthority(senderJid)) {
     await saveSetting('CONTROL_GROUP_JID', chatJid, 'JID of the private Control Group');
     await sock.sendMessage(chatJid, { text: `✅ Control Group set to \`${chatJid}\`.` });
@@ -288,12 +286,20 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
   }
 
   if (cmd === '#gita' && isAuthorized(senderJid, channel, 'gita_attendance')) {
-    const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
-    if (!binding?.groupJid) return sendControlMsg('⚠️ `gita_attendance` is not bound to a group yet. Use `#find` and `#bind`.');
+    const baseBinding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
+    if (!baseBinding) return sendControlMsg('⚠️ `gita_attendance` binding row missing in Master Sheet.');
 
-    const dateMatch = args[0] && /^\d{2}\/\d{2}\/\d{2}$/.test(args[0]) ? args[0] : null;
+    const isTest = args[0]?.toLowerCase() === 'test';
+    const cleanArgs = isTest ? args.slice(1) : args;
+    const binding = isTest
+      ? { ...baseBinding, bindKey: 'gita_test', groupJid: chatJid }
+      : baseBinding;
+
+    if (!binding.groupJid) return sendControlMsg('⚠️ `gita_attendance` is not bound to a group yet. Use `#find` and `#bind`.');
+
+    const dateMatch = cleanArgs[0] && /^\d{2}\/\d{2}\/\d{2}$/.test(cleanArgs[0]) ? cleanArgs[0] : null;
     const targetDate = dateMatch || formatISTDate();
-    const sessionOverride = dateMatch ? args.slice(1).join(' ') : args.join(' ');
+    const sessionOverride = dateMatch ? cleanArgs.slice(1).join(' ') : cleanArgs.join(' ');
     const fourth = await generateTauntOption(sessionOverride || 'Today');
 
     const res = await gita.dispatchGitaPoll({
@@ -303,6 +309,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
       targetDate,
       sessionOverride: sessionOverride || undefined,
       fourthOptionOverride: fourth,
+      force: isTest,
     });
 
     if (res.status === 'ALREADY_SENT') {
