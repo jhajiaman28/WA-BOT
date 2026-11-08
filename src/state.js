@@ -67,7 +67,7 @@ async function loadMasterState() {
         targetTab: (r[4] || '').trim(),
         targetDate: (r[5] || '').trim(),
         sessionName: (r[6] || '').trim(),
-        options: JSON.parse(r[7] || '[]'),
+        ...(() => { const p = JSON.parse(r[7] || '[]'); return Array.isArray(p) ? { options: p, secret: '' } : { options: p.options || [], secret: p.secret || '' }; })(),
         createdAt: Number(r[8] || 0),
         expiresAt,
       });
@@ -128,7 +128,7 @@ async function saveActivePoll(poll) {
     poll.targetTab,
     poll.targetDate,
     poll.sessionName,
-    JSON.stringify(poll.options),
+    JSON.stringify({ options: poll.options, secret: poll.secret || '' }),
     String(poll.createdAt),
     String(poll.expiresAt),
   ]);
