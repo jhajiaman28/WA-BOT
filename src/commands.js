@@ -300,6 +300,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     const dateMatch = cleanArgs[0] && /^\d{2}\/\d{2}\/\d{2}$/.test(cleanArgs[0]) ? cleanArgs[0] : null;
     const targetDate = dateMatch || formatISTDate();
     const sessionOverride = dateMatch ? cleanArgs.slice(1).join(' ') : cleanArgs.join(' ');
+    await sendControlMsg('⏳ Command received, preparing poll...');
     const fourth = await generateTauntOption(sessionOverride || 'Today');
 
     const res = await gita.dispatchGitaPoll({
