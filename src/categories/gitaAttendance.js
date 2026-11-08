@@ -83,7 +83,6 @@ async function dispatchGitaPoll({ sendPoll, sendControlMsg, binding, targetDate,
 
   state.dailySentFlags.add(flagKey);
 
-  // Mark everyone with ➖ upon dispatch
   const updates = members.map((m) => ({
     range: `${binding.targetTab}!${m.colLetter}${found.rowNum}`,
     values: [['➖']],
@@ -96,6 +95,8 @@ async function dispatchGitaPoll({ sendPoll, sendControlMsg, binding, targetDate,
     );
   }
 
+  const secretBuf = sent.message?.messageContextInfo?.messageSecret;
+  const secret = secretBuf ? Buffer.from(secretBuf).toString('base64') : '';
   const retentionDays = Number(state.settings.POLL_RETENTION_DAYS || 30);
   const now = Date.now();
   await saveActivePoll({
@@ -107,6 +108,7 @@ async function dispatchGitaPoll({ sendPoll, sendControlMsg, binding, targetDate,
     targetDate: dateStr,
     sessionName,
     options: payload.options,
+    secret,
     createdAt: now,
     expiresAt: now + retentionDays * 86400000,
   });
