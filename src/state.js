@@ -74,6 +74,11 @@ async function loadMasterState() {
     }
   });
 
+  state.dailySentFlags.clear();
+  for (const poll of state.activePolls.values()) {
+    const b = state.bindings.find((x) => x.groupJid === poll.groupJid);
+    if (b && poll.targetDate) state.dailySentFlags.add(`${b.bindKey}:${poll.targetDate}`);
+  }
   state.lastSyncAt = formatISTTimestamp();
   console.log(`[State] Loaded: ${state.bindings.length} bindings, ${state.members.length} members, ${state.activePolls.size} active polls.`);
 }
