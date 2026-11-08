@@ -16,7 +16,8 @@ const HELP_TEXT = `*Bot Commands*
 • \`#stop\` — Stop active listener & notify
 • \`#pause_polls\` / \`#resume_polls\` — Pause/resume scheduled polls
 • \`#admin add <phone> [FULL|LIMITED]\` — Grant access
-• \`#admin remove <phone>\` — Revoke access`;
+• \`#admin remove <phone>\` — Revoke access
+• \`#register\` — Bulk register members (phone + name per line)`;
 
 let lastGroupSearch = [];
 
@@ -115,10 +116,15 @@ async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePo
   }
 
   if (prompt.type === 'CONFIRM_SESSION') {
+    state.pendingPrompts.delete(quotedId);
+    if (/^(cancel|skip|no)$/i.test(txt)) {
+      state.dailySentFlags.add(`${prompt.bindKey}:${prompt.targetDate}`);
+      await sendControlMsg(`⏹️ Cancelled tonight's 10:00 PM poll for *${prompt.targetDate}*.`);
+      return true;
+    }
     if (!/^ok$/i.test(txt)) {
       state.settings[`SESSION_OVERRIDE_${prompt.targetDate}`] = txt;
     }
-    state.pendingPrompts.delete(quotedId);
     await sendControlMsg(`✅ Session confirmed for ${prompt.targetDate}: *${/^ok$/i.test(txt) ? prompt.sessionName : txt}*`);
     return true;
   }
@@ -283,6 +289,27 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
       }
       return sendControlMsg(`🗑️ Removed +${phone}.`);
     }
+  }
+
+  if (cmd === '#register' && fullAuth) {
+    const lines = text.trim().split(/\r?\n/).slice(1).map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) {
+      return sendControlMsg('Usage:\n#register [groupKey]\n9198XXXXXXXX Alok\n98XXXXXXXX Aman');
+    }
+    const groupKey = args[0] && !/\d{7,}/.test(args[0]) ? args[0] : 'gita_attendance';
+    let added = 0;
+    const failed = [];
+    for (const line of lines) {
+      const m = line.match(/^([+\d\s-]+?)[\s,:-]+([A-Za-z].*)$/);
+      if (!m) { failed.push(line); continue; }
+      let digits = m[1].replace(/\D/g, '');
+      if (digits.length === 10) digits = '91' + digits;
+      if (digits.length < 10) { failed.push(line); continue; }
+      await registerMember(`${digits}@s.whatsapp.net`, '', m[2].trim(), groupKey);
+      added++;
+    }
+    const warn = failed.length ? `\n⚠️ Skipped ${failed.length} line(s): ${failed.slice(0, 5).join(' | ')}` : '';
+    return sendControlMsg(`✅ Registered *${added}* member(s) under \`${groupKey}\`.${warn}`);
   }
 
   if (cmd === '#gita' && isAuthorized(senderJid, channel, 'gita_attendance')) {
