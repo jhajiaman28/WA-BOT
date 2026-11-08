@@ -175,7 +175,7 @@ async function startWhatsApp() {
           console.log(`[Poll Update] poll=${key.id} agg=${JSON.stringify(agg)}`);
 
           for (const u of update.pollUpdates) {
-            const voterJid = u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid;
+            const voterJid = u.pollUpdateMessageKey?.fromMe ? sock.user?.id : (u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid);
             const voterPhone = normalizePhone(voterJid);
             const votedOption = agg.find((a) =>
               a.voters.some((v) => v === voterJid || (voterPhone && normalizePhone(v) === voterPhone))
