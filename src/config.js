@@ -1,4 +1,4 @@
-require('dotenv').config?.();
+try { require('dotenv').config(); } catch {}
 
 const TZ = 'Asia/Kolkata';
 
