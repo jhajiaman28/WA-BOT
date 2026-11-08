@@ -49,7 +49,7 @@ async function askSessionConfirmation(sendControlMsg, binding) {
   const session = found?.sessionName || '(Blank in sheet)';
 
   const msg = await sendControlMsg(
-    `⏰ *9:45 PM Check (${today})*\nSession in sheet: *${session}*\n\nQuote-reply with a new session name to override, or reply *OK* to confirm. (Auto-sends at 10:00 PM if unchanged.)`
+    `⏰ *9:45 PM Check (${today})*\nSession in sheet: *${session}*\n\nQuote-reply with a new session name to override, *OK* to confirm, or *Cancel* to skip tonight's poll. (Auto-sends at 10:00 PM if unchanged.)`
   );
   if (msg?.key?.id) {
     state.pendingPrompts.set(msg.key.id, {
