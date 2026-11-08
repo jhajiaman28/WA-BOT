@@ -37,14 +37,17 @@ async function generateWithFallback(prompt) {
 async function generateTauntOption(sessionName) {
   if (!GEMINI_API_KEY) return '😒Not Interested';
   try {
-    const raw = await generateWithFallback(
-      `Generate ONE short, witty, self-deprecating WhatsApp poll option (max 28 chars, starting with 1 emoji) for someone who skipped today's "${sessionName}" session.
+    const raw = await Promise.race([
+      generateWithFallback(
+        `Generate ONE short, witty, self-deprecating WhatsApp poll option (max 28 chars, starting with 1 emoji) for someone who skipped today's "${sessionName}" session.
 Rules:
 - Must be written in FIRST PERSON (the voter playfully describing themselves, e.g., "🤡Jhunnuram Mode", "🫏Aaj Gadahva bana", "😒Not Interested").
 - May playfully use Acharya Prashant community terms like "Jhunnuram", "Gadahva", "Maya me phansa".
 - NEVER be rude or disrespectful, and NEVER use "tum" (if addressing anyone, only use respectful "aap").
 Return ONLY the option text.`
-    );
+      ),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), 4000)),
+    ]);
     const text = raw.replace(/["\n]/g, '');
     return text.slice(0, 35) || '😒Not Interested';
   } catch {
