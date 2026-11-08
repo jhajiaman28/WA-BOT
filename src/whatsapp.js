@@ -3,11 +3,12 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   getAggregateVotesInPollMessage,
+  decryptPollVote,
   fetchLatestBaileysVersion,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
-const { AUTH_DIR } = require('./config');
+const { AUTH_DIR, normalizePhone } = require('./config');
 const google = require('./google');
 const { state } = require('./state');
 const { processIncomingMessage } = require('./commands');
@@ -58,6 +59,15 @@ async function sendPoll(groupJid, { question, options, selectableCount = 1 }) {
   return sent;
 }
 
+function buildFallbackPollMsg(poll) {
+  return {
+    pollCreationMessageV3: {
+      options: poll.options.map((o) => ({ optionName: o })),
+    },
+    ...(poll.secret ? { messageContextInfo: { messageSecret: Buffer.from(poll.secret, 'base64') } } : {}),
+  };
+}
+
 async function startWhatsApp() {
   await google.restoreAuthFromDrive();
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -99,10 +109,38 @@ async function startWhatsApp() {
   sock.ev.on('messages.upsert', async ({ messages }) => {
     for (const msg of messages) {
       try {
-        if (!msg.message || state.sentMsgIds.has(msg.key.id)) continue;
+        if (!msg.message) continue;
         if (msg.message.pollCreationMessage || msg.message.pollCreationMessageV3) {
           messageStore.set(msg.key.id, msg);
         }
+
+        if (msg.message.pollUpdateMessage) {
+          const pu = msg.message.pollUpdateMessage;
+          const pollId = pu.pollCreationMessageKey?.id;
+          const poll = state.activePolls.get(pollId);
+          if (poll && poll.secret) {
+            const voterJid = msg.key.fromMe ? sock.user?.id : (msg.key.participant || msg.key.remoteJid);
+            const creatorJid = pu.pollCreationMessageKey?.participant || sock.user?.id;
+            const decrypted = decryptPollVote(pu.vote, {
+              pollCreatorJid: creatorJid,
+              pollMsgId: pollId,
+              pollEncKey: Buffer.from(poll.secret, 'base64'),
+              voterJid,
+            });
+            const selectedHashes = (decrypted?.selectedOptions || []).map((b) => Buffer.from(b).toString('hex'));
+            const crypto = require('crypto');
+            const selectedNames = poll.options.filter((opt) =>
+              selectedHashes.includes(crypto.createHash('sha256').update(opt).digest('hex'))
+            );
+            console.log(`[Poll Upsert Vote] poll=${pollId} voter=${voterJid} opts=${selectedNames.join(',')}`);
+            if (selectedNames.length) {
+              await gita.handleVote({ poll, voterJid, pushName: msg.pushName || '', selectedOptions: selectedNames, sendControlMsg });
+            }
+          }
+          continue;
+        }
+
+        if (state.sentMsgIds.has(msg.key.id)) continue;
 
         const text = msg.message.conversation
           || msg.message.extendedTextMessage?.text
@@ -130,13 +168,18 @@ async function startWhatsApp() {
           if (!poll) continue;
           const pollMsg = messageStore.get(key.id);
           const agg = getAggregateVotesInPollMessage({
-            message: pollMsg?.message || { pollCreationMessageV3: { options: poll.options.map((o) => ({ optionName: o })) } },
+            message: pollMsg?.message || buildFallbackPollMsg(poll),
             pollUpdates: update.pollUpdates,
           });
 
+          console.log(`[Poll Update] poll=${key.id} agg=${JSON.stringify(agg)}`);
+
           for (const u of update.pollUpdates) {
             const voterJid = u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid;
-            const votedOption = agg.find((a) => a.voters.includes(voterJid))?.name;
+            const voterPhone = normalizePhone(voterJid);
+            const votedOption = agg.find((a) =>
+              a.voters.some((v) => v === voterJid || (voterPhone && normalizePhone(v) === voterPhone))
+            )?.name;
             if (votedOption) {
               await gita.handleVote({ poll, voterJid, pushName: '', selectedOptions: [votedOption], sendControlMsg });
             }
