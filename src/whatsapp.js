@@ -4,6 +4,7 @@ const {
   DisconnectReason,
   getAggregateVotesInPollMessage,
   decryptPollVote,
+  jidNormalizedUser,
   fetchLatestBaileysVersion,
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
@@ -119,8 +120,10 @@ async function startWhatsApp() {
           const pollId = pu.pollCreationMessageKey?.id;
           const poll = state.activePolls.get(pollId);
           if (poll && poll.secret) {
-            const voterJid = msg.key.fromMe ? sock.user?.id : (msg.key.participant || msg.key.remoteJid);
-            const creatorJid = pu.pollCreationMessageKey?.participant || sock.user?.id;
+            const rawVoter = msg.key.fromMe ? sock.user?.id : (msg.key.participant || msg.key.remoteJid);
+            const rawCreator = pu.pollCreationMessageKey?.participant || sock.user?.id;
+            const voterJid = jidNormalizedUser(rawVoter);
+            const creatorJid = jidNormalizedUser(rawCreator);
             const decrypted = decryptPollVote(pu.vote, {
               pollCreatorJid: creatorJid,
               pollMsgId: pollId,
@@ -132,7 +135,6 @@ async function startWhatsApp() {
             const selectedNames = poll.options.filter((opt) =>
               selectedHashes.includes(crypto.createHash('sha256').update(opt).digest('hex'))
             );
-            console.log(`[Poll Upsert Vote] poll=${pollId} voter=${voterJid} opts=${selectedNames.join(',')}`);
             if (selectedNames.length) {
               await gita.handleVote({ poll, voterJid, pushName: msg.pushName || '', selectedOptions: selectedNames, sendControlMsg });
             }
@@ -149,7 +151,7 @@ async function startWhatsApp() {
         if (!text) continue;
 
         const chatJid = msg.key.remoteJid;
-        const senderJid = msg.key.fromMe ? sock.user?.id : (msg.key.participant || chatJid);
+        const senderJid = jidNormalizedUser(msg.key.fromMe ? sock.user?.id : (msg.key.participant || chatJid));
         const quotedId = msg.message.extendedTextMessage?.contextInfo?.stanzaId || null;
 
         await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll });
@@ -172,10 +174,9 @@ async function startWhatsApp() {
             pollUpdates: update.pollUpdates,
           });
 
-          console.log(`[Poll Update] poll=${key.id} agg=${JSON.stringify(agg)}`);
-
           for (const u of update.pollUpdates) {
-            const voterJid = u.pollUpdateMessageKey?.fromMe ? sock.user?.id : (u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid);
+            const rawVoter = u.pollUpdateMessageKey?.fromMe ? sock.user?.id : (u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid);
+            const voterJid = jidNormalizedUser(rawVoter);
             const voterPhone = normalizePhone(voterJid);
             const votedOption = agg.find((a) =>
               a.voters.some((v) => v === voterJid || (voterPhone && normalizePhone(v) === voterPhone))
@@ -189,7 +190,7 @@ async function startWhatsApp() {
         const editedText = update.message?.editedMessage?.message?.conversation
           || update.message?.editedMessage?.message?.extendedTextMessage?.text;
         if (editedText && !state.sentMsgIds.has(key.id)) {
-          const senderJid = key.fromMe ? sock.user?.id : (key.participant || key.remoteJid);
+          const senderJid = jidNormalizedUser(key.fromMe ? sock.user?.id : (key.participant || key.remoteJid));
           await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll });
         }
       } catch (err) {
