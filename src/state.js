@@ -8,6 +8,7 @@ const state = {
   members: [],
   activePolls: new Map(),
   voteCache: new Map(),
+  customSchedules: [],
   pendingPrompts: new Map(),
   listeners: new Map(),
   chatHistory: new Map(),
@@ -17,12 +18,13 @@ const state = {
 };
 
 async function loadMasterState() {
-  const [settingsRows, bindingRows, permRows, memberRows, pollRows] = await Promise.all([
+  const [settingsRows, bindingRows, permRows, memberRows, pollRows, schedRows] = await Promise.all([
     google.getRows(MASTER_SHEET_ID, 'Settings!A2:C'),
     google.getRows(MASTER_SHEET_ID, 'Group_Bindings!A2:H'),
     google.getRows(MASTER_SHEET_ID, 'Admin_Permissions!A2:E'),
     google.getRows(MASTER_SHEET_ID, 'Member_Registry!A2:E'),
     google.getRows(MASTER_SHEET_ID, 'Active_Polls!A2:J'),
+    google.getRows(MASTER_SHEET_ID, 'Custom_Schedules!A2:F').catch(() => []),
   ]);
 
   state.settings = {};
@@ -74,6 +76,15 @@ async function loadMasterState() {
       });
     }
   });
+
+  state.customSchedules = schedRows.filter((r) => r[0] && r[5] !== 'DONE').map((r) => ({
+    id: (r[0] || '').trim(),
+    targetJid: (r[1] || '').trim(),
+    payload: (r[2] || '').trim(),
+    runAtIST: (r[3] || '').trim(),
+    repeat: (r[4] || 'ONCE').trim().toUpperCase(),
+    status: (r[5] || 'ACTIVE').trim().toUpperCase(),
+  }));
 
   state.dailySentFlags.clear();
   for (const poll of state.activePolls.values()) {
@@ -165,6 +176,13 @@ function pushChatHistory(chatJid, role, text) {
   state.chatHistory.set(chatJid, hist);
 }
 
+
+function isPaused(categoryKey) {
+  if (state.settings.SCHEDULE_PAUSED === 'TRUE') return true;
+  if (categoryKey && state.settings[`PAUSED_${categoryKey}`] === 'TRUE') return true;
+  return false;
+}
+
 module.exports = {
   state,
   loadMasterState,
@@ -175,4 +193,5 @@ module.exports = {
   isFullAuthority,
   isAuthorized,
   pushChatHistory,
+  isPaused,
 };
