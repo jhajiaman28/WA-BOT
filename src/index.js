@@ -3,7 +3,7 @@ const cron = require('node-cron');
 const { PORT, TZ, formatISTDate } = require('./config');
 const google = require('./google');
 const { state, loadMasterState } = require('./state');
-const { startWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus } = require('./whatsapp');
+const { startWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus, sendGroupText } = require('./whatsapp');
 const gita = require('./categories/gitaAttendance');
 const { generateTauntOption } = require('./ai');
 
@@ -54,6 +54,24 @@ function setupCrons() {
       sessionOverride,
       fourthOptionOverride: fourth,
     }));
+  }, { timezone: TZ });
+
+  // 10:00 AM IST Daily Report (for yesterday)
+  cron.schedule('0 10 * * *', async () => {
+    if (state.settings.SCHEDULE_PAUSED === 'TRUE') return;
+    const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
+    if (!binding?.groupJid) return;
+    const res = await gita.buildDailyReport(binding);
+    if (res.text) await sendGroupText(binding.groupJid, res.text);
+  }, { timezone: TZ });
+
+  // Monday 2:00 PM IST Weekly Report (for previous Mon-Sun week)
+  cron.schedule('0 14 * * 1', async () => {
+    if (state.settings.SCHEDULE_PAUSED === 'TRUE') return;
+    const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
+    if (!binding?.groupJid) return;
+    const res = await gita.buildWeeklyReport(binding);
+    if (res.text) await sendGroupText(binding.groupJid, res.text);
   }, { timezone: TZ });
 
   // Retry queue flush every 2 minutes
