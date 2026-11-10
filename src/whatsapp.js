@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -69,6 +70,42 @@ function buildFallbackPollMsg(poll) {
   };
 }
 
+function tryDecryptVote(pu, msg, poll) {
+  const creators = [...new Set([
+    pu.pollCreationMessageKey?.participant,
+    sock.user?.id,
+    sock.user?.lid,
+  ].filter(Boolean).map((j) => jidNormalizedUser(j)))];
+
+  const voters = [...new Set([
+    msg.key.fromMe ? sock.user?.id : null,
+    msg.key.fromMe ? sock.user?.lid : null,
+    msg.key.participant,
+    msg.key.participantAlt,
+    msg.key.remoteJid,
+  ].filter(Boolean).map((j) => jidNormalizedUser(j)))];
+
+  const encKey = Buffer.from(poll.secret, 'base64');
+  const pollMsgId = pu.pollCreationMessageKey?.id;
+
+  for (const creatorJid of creators) {
+    for (const voterJid of voters) {
+      try {
+        const decrypted = decryptPollVote(pu.vote, {
+          pollCreatorJid: creatorJid,
+          pollMsgId,
+          pollEncKey: encKey,
+          voterJid,
+        });
+        return { decrypted, voterJid };
+      } catch {
+        // try next JID combination
+      }
+    }
+  }
+  throw new Error('Could not decrypt vote with any JID combination');
+}
+
 async function startWhatsApp() {
   await google.restoreAuthFromDrive();
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -107,6 +144,14 @@ async function startWhatsApp() {
     }
   });
 
+  sock.ev.on('messaging-history.set', async ({ messages }) => {
+    for (const msg of messages || []) {
+      if (msg.message?.pollUpdateMessage && state.activePolls.has(msg.message.pollUpdateMessage.pollCreationMessageKey?.id)) {
+        sock.ev.emit('messages.upsert', { messages: [msg], type: 'append' });
+      }
+    }
+  });
+
   sock.ev.on('messages.upsert', async ({ messages }) => {
     for (const msg of messages) {
       try {
@@ -120,24 +165,13 @@ async function startWhatsApp() {
           const pollId = pu.pollCreationMessageKey?.id;
           const poll = state.activePolls.get(pollId);
           if (poll && poll.secret) {
-            const rawVoter = msg.key.fromMe ? sock.user?.id : (msg.key.participant || msg.key.remoteJid);
-            const rawCreator = pu.pollCreationMessageKey?.participant || sock.user?.id;
-            const voterJid = jidNormalizedUser(rawVoter);
-            const creatorJid = jidNormalizedUser(rawCreator);
-            const decrypted = decryptPollVote(pu.vote, {
-              pollCreatorJid: creatorJid,
-              pollMsgId: pollId,
-              pollEncKey: Buffer.from(poll.secret, 'base64'),
-              voterJid,
-            });
+            const { decrypted, voterJid } = tryDecryptVote(pu, msg, poll);
             const selectedHashes = (decrypted?.selectedOptions || []).map((b) => Buffer.from(b).toString('hex'));
-            const crypto = require('crypto');
             const selectedNames = poll.options.filter((opt) =>
               selectedHashes.includes(crypto.createHash('sha256').update(opt).digest('hex'))
             );
-            if (selectedNames.length) {
-              await gita.handleVote({ poll, voterJid, pushName: msg.pushName || '', selectedOptions: selectedNames, sendControlMsg });
-            }
+            const finalOpts = selectedNames.length ? selectedNames : ['__UNVOTE__'];
+            await gita.handleVote({ poll, voterJid, pushName: msg.pushName || '', selectedOptions: finalOpts, sendControlMsg });
           }
           continue;
         }
@@ -175,7 +209,9 @@ async function startWhatsApp() {
           });
 
           for (const u of update.pollUpdates) {
-            const rawVoter = u.pollUpdateMessageKey?.fromMe ? sock.user?.id : (u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid);
+            const rawVoter = u.pollUpdateMessageKey?.fromMe
+              ? sock.user?.id
+              : (u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid);
             const voterJid = jidNormalizedUser(rawVoter);
             const voterPhone = normalizePhone(voterJid);
             const votedOption = agg.find((a) =>
