@@ -193,7 +193,8 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
 
   if (text.trim().toLowerCase() === '#set_control_group' && isFullAuthority(senderJid)) {
     await saveSetting('CONTROL_GROUP_JID', chatJid, 'JID of the private Control Group');
-    await sock.sendMessage(chatJid, { text: `✅ Control Group set to \`${chatJid}\`.` });
+    const sent = await sock.sendMessage(chatJid, { text: `✅ Control Group set to \`${chatJid}\`.` });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
     return;
   }
 
@@ -338,7 +339,8 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
       ? await gita.buildDailyReport(binding, targetDate)
       : await gita.buildWeeklyReport(binding, targetDate);
     if (res.error) return sendControlMsg(`⚠️ ${res.error}`);
-    await sock.sendMessage(destJid, { text: res.text });
+    const sent = await sock.sendMessage(destJid, { text: res.text });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
     return;
   }
 
