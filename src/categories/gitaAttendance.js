@@ -134,6 +134,15 @@ async function markMemberVote({ poll, officialName, symbol, sendControlMsg }) {
       `Vote ${officialName} (${poll.targetDate})`,
       sendControlMsg
     );
+    const { MASTER_SHEET_ID, formatISTTimestamp } = require('../config');
+    google.appendRow(MASTER_SHEET_ID, 'Gita_Vote_Logs', [
+      String(Date.now()),
+      formatISTTimestamp(),
+      poll.targetDate,
+      officialName,
+      '',
+      symbol,
+    ]).catch(() => {});
   } else if (matches.length > 1) {
     const list = matches.map((m) => `Col ${m.colLetter} (${m.name})`).join(', ');
     const msg = await sendControlMsg(
@@ -240,6 +249,140 @@ async function buildDailyReport(binding, targetDate) {
     const sym = raw === '✅' ? '✅' : raw === '❌' ? '❌' : '➖';
     if (sym === '✅') yes++;
     else if (sym === '❌') no++;
+    else none++;
+    return `${i + 1}. ${m.name} ${sym}`;
+  });
+
+  const title = found.sessionName ? `${dateStr} - *${found.sessionName}*` : `${dateStr} - *Session*`;
+  const text = `${title}\nPoll: ${yes}✅ / ${no}❌ / ${none}➖ (Total ${members.length})\n\n${lines.join('\n')}`;
+  return { text, dateStr };
+}
+
+function parseDDMMYY(str) {
+  const [d, m, y] = str.split('/').map(Number);
+  return new Date(2000 + y, m - 1, d);
+}
+
+async function buildWeeklyReport(binding, refDateStr) {
+  const { getISTNow } = require('../config');
+  const ref = refDateStr ? parseDDMMYY(refDateStr) : (() => { const d = getISTNow(); d.setDate(d.getDate() - 1); return d; })();
+  const day = ref.getDay();
+  const diffToMon = (day === 0 ? -6 : 1 - day);
+  const mon = new Date(ref);
+  mon.setDate(ref.getDate() + diffToMon);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+
+  const weekDates = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(mon);
+    d.setDate(mon.getDate() + i);
+    weekDates.push(formatISTDate(d));
+  }
+
+  const { rows, members } = await getSheetLayout(binding.targetSheetId, binding.targetTab);
+  const dayRows = [];
+  let firstRowIdx = -1;
+  for (let r = 2; r < rows.length; r++) {
+    const dStr = (rows[r]?.[1] || '').trim();
+    if (weekDates.includes(dStr)) {
+      if (firstRowIdx < 0) firstRowIdx = r;
+      dayRows.push({
+        dateShort: dStr.slice(0, 5),
+        dayShort: ((rows[r]?.[2] || '').trim()).slice(0, 3),
+        session: (rows[r]?.[3] || '').trim() || 'Session',
+        row: rows[r],
+      });
+    }
+  }
+  if (!dayRows.length) return { error: `No rows found for week ${weekDates[0]} – ${weekDates[6]}.` };
+
+  let weekLabel = 'Weekly';
+  for (let r = firstRowIdx - 1; r >= 0; r--) {
+    const cellA = (rows[r]?.[0] || '').trim();
+    if (/^week\s+\d+/i.test(cellA)) { weekLabel = cellA; break; }
+  }
+
+  const total = dayRows.length;
+  const buckets = { full: [], high: [], mod: [], low: [], zero: [] };
+  for (const m of members) {
+    let count = 0;
+    const trail = dayRows.map((dr) => {
+      const raw = (dr.row[m.colIndex] || '').trim();
+      const sym = raw === '✅' ? '✅' : raw === '❌' ? '❌' : '➖';
+      if (sym === '✅') count++;
+      return sym;
+    }).join('');
+
+    const item = { name: m.name, count, trail };
+    if (count === total) buckets.full.push(item);
+    else if (count >= Math.ceil(total * 0.7)) buckets.high.push(item);
+    else if (count >= Math.ceil(total * 0.4)) buckets.mod.push(item);
+    else if (count >= 1) buckets.low.push(item);
+    else buckets.zero.push(item);
+  }
+
+  const sep = '*───────────────────*';
+  const sessLines = dayRows.map((d, i) => `${i + 1}. ${d.dateShort} (${d.dayShort}) — ${d.session}`).join('\n');
+  const fmtPlain = (arr) => arr.map((x, i) => `${i + 1}. ${x.name} (${x.count}/${total})`).join('\n');
+  const fmtTrail = (arr) => arr.map((x, i) => `${i + 1}. ${x.name} (${x.count}/${total}) — ${x.trail}`).join('\n');
+
+  const sections = [
+    `*WEEKLY ATTENDANCE REPORT*`,
+    `*${weekLabel} (${weekDates[0]} – ${weekDates[6]})*`,
+    sep,
+    `\n📅 *Sessions Conducted:*\n${sessLines}`,
+    `\n${sep}`,
+  ];
+  if (buckets.full.length) sections.push(`\n🏆 *100% Attendance (${total}/${total} Sessions) [${buckets.full.length} Members]:*\n${fmtPlain(buckets.full)}`);
+  if (buckets.high.length) sections.push(`\n🌟 *High Attendance (5–6/${total} Sessions) [${buckets.high.length} Members]:*\n${fmtTrail(buckets.high)}`);
+  if (buckets.mod.length) sections.push(`\n⚡ *Moderate Attendance (3–4/${total} Sessions) [${buckets.mod.length} Members]:*\n${fmtTrail(buckets.mod)}`);
+  if (buckets.low.length) sections.push(`\n⚠️ *Low Attendance (1–2/${total} Sessions) [${buckets.low.length} Members]:*\n${fmtTrail(buckets.low)}`);
+  if (buckets.zero.length) sections.push(`\n💤 *Zero Attendance (0/${total} Sessions) [${buckets.zero.length} Members]:*\n${fmtPlain(buckets.zero)}`);
+  sections.push(`\n${sep}\n📊 *Total Registered Members:* ${members.length}`);
+
+  return { text: sections.join('\n') };
+}
+
+
+async function pruneOldLogs() {
+  const { MASTER_SHEET_ID } = require('../config');
+  const retentionDays = Number(state.settings.POLL_RETENTION_DAYS || 30);
+  const cutoff = Date.now() - retentionDays * 86400000;
+
+  // Prune Active_Polls older than retentionDays
+  try {
+    const pollRows = await google.getRows(MASTER_SHEET_ID, 'Active_Polls!A2:J');
+    const keptPolls = pollRows.filter((r) => !r[9] || Number(r[9]) > Date.now());
+    if (keptPolls.length < pollRows.length) {
+      const { sheets } = (() => ({ sheets: null }))();
+      await google.updateRange(MASTER_SHEET_ID, 'Active_Polls!A2:J' + (pollRows.length + 1), pollRows.map((r) => (!r[9] || Number(r[9]) > Date.now()) ? r : Array(10).fill('')), 'RAW');
+    }
+  } catch {}
+
+  // Prune Gita_Vote_Logs older than retentionDays
+  try {
+    const logRows = await google.getRows(MASTER_SHEET_ID, 'Gita_Vote_Logs!A2:F');
+    const hasOld = logRows.some((r) => r[0] && Number(r[0]) < cutoff);
+    if (hasOld) {
+      const cleaned = logRows.map((r) => (r[0] && Number(r[0]) < cutoff) ? Array(6).fill('') : r);
+      await google.updateRange(MASTER_SHEET_ID, 'Gita_Vote_Logs!A2:F' + (logRows.length + 1), cleaned, 'RAW');
+    }
+  } catch {}
+}
+
+module.exports = {
+  CATEGORY,
+  askSessionConfirmation,
+  dispatchGitaPoll,
+  markMemberVote,
+  handleVote,
+  addNewMemberAlphabetical,
+  syncCachedVotes,
+  buildDailyReport,
+  buildWeeklyReport,
+  pruneOldLogs,
+};o++;
     else none++;
     return `${i + 1}. ${m.name} ${sym}`;
   });
