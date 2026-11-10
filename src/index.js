@@ -136,13 +136,17 @@ function setupCrons() {
 }
 
 async function main() {
-  await loadMasterState();
   app.listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
+  try {
+    await loadMasterState();
+  } catch (err) {
+    console.log('[Startup State Error]', err.stack || err.message);
+  }
   setupCrons();
   await startWhatsApp();
 }
 
 main().catch((err) => {
-  console.error('[Fatal]', err);
-  process.exit(1);
+  console.log('[Fatal]', err.stack || err.message);
+  setTimeout(() => process.exit(1), 1000);
 });
