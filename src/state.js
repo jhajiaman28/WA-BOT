@@ -7,6 +7,7 @@ const state = {
   permissions: [],
   members: [],
   activePolls: new Map(),
+  voteCache: new Map(),
   pendingPrompts: new Map(),
   listeners: new Map(),
   chatHistory: new Map(),
