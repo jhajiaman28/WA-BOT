@@ -4,21 +4,26 @@ const { state, loadMasterState, saveSetting, registerMember, isFullAuthority, is
 const gita = require('./categories/gitaAttendance');
 const { generateTauntOption, handleAIConversation } = require('./ai');
 
-const HELP_TEXT = `*Bot Commands*
-• \`#help\` — List all commands
-• \`#status\` — System health & active polls
-• \`#sync\` — Reload Master Sheet data
+const HELP_TEXT = `*BOT COMMANDS*
+
+*Polls & Reports*
+• \`#gita [test] [DD/MM/YY] [Session]\` — Send Gita poll
+• \`#daily / #weekly [test] [DD/MM/YY]\` — Attendance report
 • \`#sync_votes\` — Re-check & fix sheet votes
-• \`#set_control_group\` — Set this group as Control Group
-• \`#find [keyword|all]\` — Search WhatsApp groups
-• \`#bind <#> <bindKey>\` — Bind group from last search
-• \`#gita [test] [DD/MM/YY] [Session]\` — Send Gita poll (use \`test\` to send here)
-• \`#listen [15m|5|forever]\` — Enable chat listening
-• \`#stop\` — Stop active listener & notify
-• \`#pause_polls\` / \`#resume_polls\` — Pause/resume scheduled polls
-• \`#admin add <phone> [FULL|LIMITED]\` — Grant access
-• \`#admin remove <phone>\` — Revoke access
-• \`#register\` — Bulk register members (phone + name per line)`;
+
+*Groups & Members*
+• \`#find [keyword|all]\` — Search groups
+• \`#bind <#> <bindKey>\` — Link group to key
+• \`#register\` — Bulk add members (phone + name/line)
+• \`#admin add|remove <phone> [FULL|LIMITED]\` — Access
+
+*System & Controls*
+• \`#status\` — Health & active polls
+• \`#sync\` — Reload Master Sheet
+• \`#pause_polls / #resume_polls\` — Toggle schedule
+• \`#listen [15m|5|forever]\` / \`#stop\` — Chat listener
+• \`#set_control_group\` — Set Control Group
+• \`#help\` — Show this list`;
 
 let lastGroupSearch = [];
 
@@ -317,6 +322,23 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     const warn = failed.length ? `\n⚠️ Skipped ${failed.length} line(s): ${failed.slice(0, 5).join(' | ')}` : '';
     await sendControlMsg(`✅ Registered *${added}* member(s) under \`${groupKey}\`.${warn}`);
     if (added > 0 && state.voteCache.size > 0) await gita.syncCachedVotes(sendControlMsg);
+    return;
+  }
+
+  if ((cmd === '#daily' || cmd === '#weekly') && isAuthorized(senderJid, channel, 'gita_attendance')) {
+    const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
+    if (!binding) return sendControlMsg('⚠️ `gita_attendance` binding missing.');
+    const isTest = args[0]?.toLowerCase() === 'test';
+    const dateArg = (isTest ? args[1] : args[0]) || '';
+    const targetDate = /^\d{2}\/\d{2}\/\d{2}$/.test(dateArg) ? dateArg : undefined;
+    const destJid = isTest ? chatJid : binding.groupJid;
+    if (!destJid) return sendControlMsg('⚠️ Group not bound yet.');
+
+    const res = cmd === '#daily'
+      ? await gita.buildDailyReport(binding, targetDate)
+      : await gita.buildWeeklyReport(binding, targetDate);
+    if (res.error) return sendControlMsg(`⚠️ ${res.error}`);
+    await sock.sendMessage(destJid, { text: res.text });
     return;
   }
 
