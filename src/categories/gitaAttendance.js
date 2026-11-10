@@ -36,6 +36,7 @@ function buildPollPayload(dateStr, sessionName, fourthOption = '😒Not Interest
 }
 
 function mapOptionToSymbol(selectedOption = '') {
+  if (selectedOption === '__UNVOTE__') return '➖';
   if (selectedOption.includes('Joined') || selectedOption.includes('Slept During Session')) return '✅';
   return '❌';
 }
@@ -149,6 +150,7 @@ async function handleVote({ poll, voterJid, pushName, selectedOptions, sendContr
   if (!selectedOptions?.length) return;
   const symbol = mapOptionToSymbol(selectedOptions[0]);
   const binding = state.bindings.find((b) => b.groupJid === poll.groupJid) || { bindKey: CATEGORY };
+  state.voteCache.set(`${poll.pollMsgId}:${voterJid}`, { poll, voterJid, pushName, symbol, groupKey: binding.bindKey });
 
   const member = findMember(voterJid, binding.bindKey);
   if (member) {
@@ -190,6 +192,31 @@ async function addNewMemberAlphabetical({ sheetId, tabName, officialName, phoneJ
   await sendControlMsg(`✅ Added *${officialName}* alphabetically at Column *${colLetter}* and saved to Member_Registry.`);
 }
 
+async function syncCachedVotes(sendControlMsg) {
+  let checked = 0;
+  let fixed = 0;
+  const sheetCache = new Map();
+  for (const item of state.voteCache.values()) {
+    const member = findMember(item.voterJid, item.groupKey);
+    if (!member) continue;
+    checked++;
+    const key = `${item.poll.targetSheetId}:${item.poll.targetTab}`;
+    if (!sheetCache.has(key)) {
+      sheetCache.set(key, await getSheetLayout(item.poll.targetSheetId, item.poll.targetTab));
+    }
+    const { rows, members } = sheetCache.get(key);
+    const dateRow = findDateRow(rows, item.poll.targetDate);
+    const col = members.find((m) => m.name.toLowerCase() === member.officialName.trim().toLowerCase());
+    if (!dateRow || !col) continue;
+    const currentVal = (rows[dateRow.rowNum - 1]?.[col.colIndex] || '').trim();
+    if (currentVal !== item.symbol) {
+      await google.updateRange(item.poll.targetSheetId, `${item.poll.targetTab}!${col.colLetter}${dateRow.rowNum}`, [[item.symbol]], 'RAW');
+      fixed++;
+    }
+  }
+  await sendControlMsg(`🔄 Vote sync complete: checked *${checked}* vote(s), fixed *${fixed}* mismatch(es) in sheet.`);
+}
+
 module.exports = {
   CATEGORY,
   askSessionConfirmation,
@@ -197,4 +224,5 @@ module.exports = {
   markMemberVote,
   handleVote,
   addNewMemberAlphabetical,
+  syncCachedVotes,
 };
