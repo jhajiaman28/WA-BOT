@@ -41,6 +41,13 @@ async function runDispatchQueue() {
   dispatching = false;
 }
 
+async function sendGroupText(groupJid, text) {
+  if (!sock || !groupJid) return null;
+  const sent = await sock.sendMessage(groupJid, { text });
+  if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+  return sent;
+}
+
 async function sendControlMsg(text) {
   const jid = state.settings.CONTROL_GROUP_JID;
   if (!sock || !jid) return null;
@@ -281,6 +288,7 @@ async function startWhatsApp() {
 
 module.exports = {
   startWhatsApp,
+  sendGroupText,
   sendControlMsg,
   sendPoll,
   enqueuePoll,
