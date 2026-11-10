@@ -2,28 +2,33 @@ const { MASTER_SHEET_ID, formatISTDate, formatISTTimestamp, normalizePhone } = r
 const google = require('./google');
 const { state, loadMasterState, saveSetting, registerMember, isFullAuthority, isAuthorized } = require('./state');
 const gita = require('./categories/gitaAttendance');
+const dailyPosts = require('./categories/dailyPosts');
 const { generateTauntOption, handleAIConversation } = require('./ai');
 
 const HELP_TEXT = `*BOT COMMANDS*
 
-*Polls & Reports*
-• \`#gita [test] [DD/MM/YY] [Session]\` — Send Gita poll
+*Polls, Posts & Reports*
+• \`#gita [test] [DD/MM/YY] [Session]\` — Gita attendance poll
 • \`#daily / #weekly [test] [DD/MM/YY]\` — Attendance report
+• \`#study [test] [DD/MM/YY]\` — Study Tracker post
+• \`#vidya [test] [DD/MM/YY]\` — Vidya-Avidya poll
 • \`#sync_votes\` — Re-check & fix sheet votes
+
+*Scheduling & Pause*
+• \`#schedule <DD/MM/YY HH:MM | HH:MM daily> | <here|bindKey> | <msg|#cmd>\` — Schedule post/cmd
+• \`#schedules / #unschedule <id>\` — List or cancel schedules
+• \`#pause_polls / #resume_polls [key]\` — Pause all or specific (e.g. \`study_tracker\`)
 
 *Groups & Members*
 • \`#find [keyword|all]\` — Search groups
-• \`#bind <#> <bindKey>\` — Link group to key
+• \`#bind <#> <bindKey>\` — Link group (\`gita_attendance\`, \`study_tracker\`, \`vidya_avidya\`)
 • \`#register\` — Bulk add members (phone + name/line)
 • \`#admin add|remove <phone> [FULL|LIMITED]\` — Access
 
 *System & Controls*
-• \`#status\` — Health & active polls
-• \`#sync\` — Reload Master Sheet
-• \`#pause_polls / #resume_polls\` — Toggle schedule
+• \`#status\` / \`#sync\` — Health & reload Master Sheet
 • \`#listen [15m|5|forever]\` / \`#stop\` — Chat listener
-• \`#set_control_group\` — Set Control Group
-• \`#help\` — Show this list`;
+• \`#set_control_group\` / \`#help\` — Setup & help`;
 
 let lastGroupSearch = [];
 
@@ -240,13 +245,23 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
   }
 
   if (cmd === '#pause_polls' && fullAuth) {
+    const key = args[0];
+    if (key) {
+      await saveSetting(`PAUSED_${key}`, 'TRUE', `Pause schedule for ${key}`);
+      return sendControlMsg(`⏸️ Paused schedule for *${key}*.`);
+    }
     await saveSetting('SCHEDULE_PAUSED', 'TRUE');
-    return sendControlMsg('⏸️ Scheduled polls paused. Background vote tracking remains active.');
+    return sendControlMsg('⏸️ All scheduled jobs paused. Background vote tracking remains active.');
   }
 
   if (cmd === '#resume_polls' && fullAuth) {
+    const key = args[0];
+    if (key) {
+      await saveSetting(`PAUSED_${key}`, 'FALSE', `Pause schedule for ${key}`);
+      return sendControlMsg(`▶️ Resumed schedule for *${key}*.`);
+    }
     await saveSetting('SCHEDULE_PAUSED', 'FALSE');
-    return sendControlMsg('▶️ Scheduled polls resumed.');
+    return sendControlMsg('▶️ All scheduled jobs resumed.');
   }
 
   if (cmd === '#listen' && fullAuth) {
@@ -342,6 +357,67 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     const sent = await sock.sendMessage(destJid, { text: res.text });
     if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
     return;
+  }
+
+  if (cmd === '#study' && isAuthorized(senderJid, channel, 'study_tracker')) {
+    const binding = state.bindings.find((b) => b.bindKey === 'study_tracker');
+    const isTest = args[0]?.toLowerCase() === 'test';
+    const dateArg = (isTest ? args[1] : args[0]) || '';
+    const targetDate = /^\d{2}\/\d{2}\/\d{2}$/.test(dateArg) ? dateArg : undefined;
+    const destJid = isTest ? chatJid : binding?.groupJid;
+    if (!destJid) return sendControlMsg('⚠️ `study_tracker` is not bound to a group yet. Use `#find` and `#bind`.');
+    const sent = await sock.sendMessage(destJid, { text: dailyPosts.buildStudyTrackerText(targetDate) });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+    return;
+  }
+
+  if (cmd === '#vidya' && isAuthorized(senderJid, channel, 'vidya_avidya')) {
+    const binding = state.bindings.find((b) => b.bindKey === 'vidya_avidya');
+    const isTest = args[0]?.toLowerCase() === 'test';
+    const dateArg = (isTest ? args[1] : args[0]) || '';
+    const targetDate = /^\d{2}\/\d{2}\/\d{2}$/.test(dateArg) ? dateArg : undefined;
+    const destJid = isTest ? chatJid : binding?.groupJid;
+    if (!destJid) return sendControlMsg('⚠️ `vidya_avidya` is not bound to a group yet. Use `#find` and `#bind`.');
+    await sendPoll(destJid, dailyPosts.buildVidyaPollPayload(targetDate));
+    return;
+  }
+
+  if (cmd === '#schedule' && fullAuth) {
+    const raw = text.trim().slice('#schedule'.length).trim();
+    const segs = raw.split('|').map((x) => x.trim());
+    if (segs.length < 3) {
+      return sendControlMsg('Usage:\n`#schedule DD/MM/YY HH:MM | here | Message or #cmd`\n`#schedule HH:MM daily | bindKey | Message or #cmd`');
+    }
+    const [timePart, targetPart, ...payloadParts] = segs;
+    const payload = payloadParts.join(' | ');
+    const isDaily = /daily$/i.test(timePart);
+    const runAtIST = timePart.replace(/\s*daily$/i, '').trim();
+    const repeat = isDaily ? 'DAILY' : 'ONCE';
+    let targetJid = chatJid;
+    if (targetPart.toLowerCase() !== 'here') {
+      const b = state.bindings.find((x) => x.bindKey === targetPart);
+      targetJid = b?.groupJid || targetPart;
+    }
+    const id = 'SCH' + Date.now().toString().slice(-5);
+    await google.appendRow(MASTER_SHEET_ID, 'Custom_Schedules', [id, targetJid, payload, runAtIST, repeat, 'ACTIVE']);
+    state.customSchedules.push({ id, targetJid, payload, runAtIST, repeat, status: 'ACTIVE' });
+    return sendControlMsg(`⏰ Scheduled *${id}* (${repeat} at \`${runAtIST}\` IST).`);
+  }
+
+  if (cmd === '#schedules' && fullAuth) {
+    if (!state.customSchedules.length) return sendControlMsg('No active custom schedules.');
+    const lines = state.customSchedules.map((s) => `• *${s.id}* (${s.repeat} @ \`${s.runAtIST}\`): ${s.payload.slice(0, 40)}`);
+    return sendControlMsg(`*Active Custom Schedules:*\n${lines.join('\n')}\n\nUse \`#unschedule <ID>\` to cancel.`);
+  }
+
+  if (cmd === '#unschedule' && fullAuth) {
+    const id = (args[0] || '').trim();
+    const rows = await google.getRows(MASTER_SHEET_ID, 'Custom_Schedules!A2:F');
+    const idx = rows.findIndex((r) => (r[0] || '').trim() === id);
+    if (idx < 0) return sendControlMsg(`Schedule \`${id}\` not found.`);
+    await google.updateRange(MASTER_SHEET_ID, `Custom_Schedules!F${idx + 2}`, [['DONE']]);
+    state.customSchedules = state.customSchedules.filter((s) => s.id !== id);
+    return sendControlMsg(`🗑️ Cancelled schedule *${id}*.`);
   }
 
   if (cmd === '#gita' && isAuthorized(senderJid, channel, 'gita_attendance')) {
