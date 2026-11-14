@@ -23,7 +23,7 @@ const HELP_TEXT = `*BOT COMMANDS*
 • \`#find [keyword|all]\` — Search groups
 • \`#bind <#> <bindKey>\` — Link group (\`gita_attendance\`, \`study_tracker\`, \`vidya_avidya\`)
 • \`#register\` — Bulk add members (phone + name/line)
-• \`#admin add|remove <phone> [FULL|LIMITED]\` — Access
+• \`#admin add <phone> [FULL|LIMITED] [cats]\` / \`remove <phone>\` — Access
 
 *System & Controls*
 • \`#status\` / \`#sync\` — Health & reload Master Sheet
@@ -255,6 +255,229 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
   }
 
   if (cmd === '#resume_polls' && fullAuth) {
+    const key = args[0];
+    if (key) {
+      await saveSetting(`PAUSED_${key}`, 'FALSE', `Pause schedule for ${key}`);
+      return sendControlMsg(`▶️ Resumed schedule for *${key}*.`);
+    }
+    await saveSetting('SCHEDULE_PAUSED', 'FALSE');
+    return sendControlMsg('▶️ All scheduled jobs resumed.');
+  }
+
+  if (cmd === '#listen' && fullAuth) {
+    return startListener(chatJid, args[0] || '', sendControlMsg);
+  }
+
+  if (cmd === '#stop' && fullAuth) {
+    return stopListener(args[0] === 'all' ? null : chatJid, 'manual #stop command', sendControlMsg);
+  }
+
+  if (cmd === '#find' && fullAuth) {
+    const query = args.join(' ').toLowerCase();
+    const allGroups = Object.values(await sock.groupFetchAllParticipating());
+    lastGroupSearch = (!query || query === 'all')
+      ? allGroups
+      : allGroups.filter((g) => (g.subject || '').toLowerCase().includes(query));
+
+    if (!lastGroupSearch.length) return sendControlMsg('No matching groups found.');
+    const lines = lastGroupSearch.slice(0, 25).map((g, i) => `${i + 1}. *${g.subject}* (\`${g.id}\`)`);
+    return sendControlMsg(`*Groups Found:*\n${lines.join('\n')}\n\nUse \`#bind <#> <bindKey>\` to link.`);
+  }
+
+  if (cmd === '#bind' && fullAuth) {
+    const idx = parseInt(args[0], 10) - 1;
+    const bindKey = args[1];
+    const target = lastGroupSearch[idx];
+    if (!target || !bindKey) return sendControlMsg('Usage: `#bind <#> <bindKey>`');
+
+    const rows = await google.getRows(MASTER_SHEET_ID, 'Group_Bindings!A2:H');
+    const rowIdx = rows.findIndex((r) => (r[0] || '').trim() === bindKey);
+    if (rowIdx < 0) return sendControlMsg(`Bind key \`${bindKey}\` not found in Group_Bindings.`);
+    await google.updateRange(MASTER_SHEET_ID, `Group_Bindings!C${rowIdx + 2}:D${rowIdx + 2}`, [[target.subject, target.id]]);
+    await loadMasterState();
+    return sendControlMsg(`✅ Bound *${target.subject}* to \`${bindKey}\`.`);
+  }
+
+  if (cmd === '#admin' && fullAuth) {
+    const sub = (args[0] || '').toLowerCase();
+    let phone = normalizePhone(args[1] || '');
+    if (phone.length === 10) phone = '91' + phone;
+    if (sub === 'add' && phone) {
+      const role = (args[2] || 'LIMITED').toUpperCase();
+      const cats = args.slice(3).join('');
+      const rows = await google.getRows(MASTER_SHEET_ID, 'Admin_Permissions!A2:E');
+      const idx = rows.findIndex((r) => normalizePhone(r[0]) === phone);
+      if (idx >= 0) {
+        await google.updateRange(MASTER_SHEET_ID, `Admin_Permissions!A${idx + 2}:E${idx + 2}`, [[phone, phone, role, 'CONTROL', cats]]);
+      } else {
+        await google.appendRow(MASTER_SHEET_ID, 'Admin_Permissions', [phone, phone, role, 'CONTROL', cats]);
+      }
+      await loadMasterState();
+      return sendControlMsg(`✅ Saved +${phone} as *${role}*${cats ? ` (${cats})` : ''}.`);
+    }
+    if (sub === 'remove' && phone) {
+      const rows = await google.getRows(MASTER_SHEET_ID, 'Admin_Permissions!A2:E');
+      const idx = rows.findIndex((r) => normalizePhone(r[0]) === phone);
+      if (idx >= 0) {
+        await google.updateRange(MASTER_SHEET_ID, `Admin_Permissions!A${idx + 2}:E${idx + 2}`, [['', '', '', '', '']]);
+        await loadMasterState();
+      }
+      return sendControlMsg(`🗑️ Removed +${phone}.`);
+    }
+  }
+
+  if (cmd === '#register' && fullAuth) {
+    const lines = text.trim().split(/\r?\n/).slice(1).map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) {
+      return sendControlMsg('Usage:\n#register [groupKey]\n9198XXXXXXXX Alok\n98XXXXXXXX Aman');
+    }
+    const groupKey = args[0] && !/\d{7,}/.test(args[0]) ? args[0] : 'gita_attendance';
+    let added = 0;
+    const failed = [];
+    for (const line of lines) {
+      const m = line.match(/^([+\d\s-]+?)[\s,:-]+([A-Za-z].*)$/);
+      if (!m) { failed.push(line); continue; }
+      let digits = m[1].replace(/\D/g, '');
+      if (digits.length === 10) digits = '91' + digits;
+      if (digits.length < 10) { failed.push(line); continue; }
+      await registerMember(`${digits}@s.whatsapp.net`, '', m[2].trim(), groupKey);
+      added++;
+    }
+    const warn = failed.length ? `\n⚠️ Skipped ${failed.length} line(s): ${failed.slice(0, 5).join(' | ')}` : '';
+    await sendControlMsg(`✅ Registered *${added}* member(s) under \`${groupKey}\`.${warn}`);
+    if (added > 0 && state.voteCache.size > 0) await gita.syncCachedVotes(sendControlMsg);
+    return;
+  }
+
+  if ((cmd === '#daily' || cmd === '#weekly') && isAuthorized(senderJid, channel, 'gita_attendance')) {
+    const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
+    if (!binding) return sendControlMsg('⚠️ `gita_attendance` binding missing.');
+    const isTest = args[0]?.toLowerCase() === 'test';
+    const dateArg = (isTest ? args[1] : args[0]) || '';
+    const targetDate = /^\d{2}\/\d{2}\/\d{2}$/.test(dateArg) ? dateArg : undefined;
+    const destJid = isTest ? chatJid : binding.groupJid;
+    if (!destJid) return sendControlMsg('⚠️ Group not bound yet.');
+
+    const res = cmd === '#daily'
+      ? await gita.buildDailyReport(binding, targetDate)
+      : await gita.buildWeeklyReport(binding, targetDate);
+    if (res.error) return sendControlMsg(`⚠️ ${res.error}`);
+    const sent = await sock.sendMessage(destJid, { text: res.text });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+    if (!isTest) await sendControlMsg(`✅ Sent ${cmd.slice(1)} report to *${binding.groupName || destJid}*.`);
+    return;
+  }
+
+  if (cmd === '#study' && isAuthorized(senderJid, channel, 'study_tracker')) {
+    const binding = state.bindings.find((b) => b.bindKey === 'study_tracker');
+    const isTest = args[0]?.toLowerCase() === 'test';
+    const dateArg = (isTest ? args[1] : args[0]) || '';
+    const targetDate = /^\d{2}\/\d{2}\/\d{2}$/.test(dateArg) ? dateArg : undefined;
+    const destJid = isTest ? chatJid : binding?.groupJid;
+    if (!destJid) return sendControlMsg('⚠️ `study_tracker` is not bound to a group yet. Use `#find` and `#bind`.');
+    const sent = await sock.sendMessage(destJid, { text: dailyPosts.buildStudyTrackerText(targetDate) });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+    if (!isTest) await sendControlMsg(`✅ Sent Study Tracker to *${binding.groupName || destJid}*.`);
+    return;
+  }
+
+  if (cmd === '#vidya' && isAuthorized(senderJid, channel, 'vidya_avidya')) {
+    const binding = state.bindings.find((b) => b.bindKey === 'vidya_avidya');
+    const isTest = args[0]?.toLowerCase() === 'test';
+    const dateArg = (isTest ? args[1] : args[0]) || '';
+    const targetDate = /^\d{2}\/\d{2}\/\d{2}$/.test(dateArg) ? dateArg : undefined;
+    const destJid = isTest ? chatJid : binding?.groupJid;
+    if (!destJid) return sendControlMsg('⚠️ `vidya_avidya` is not bound to a group yet. Use `#find` and `#bind`.');
+    await sendPoll(destJid, dailyPosts.buildVidyaPollPayload(targetDate));
+    if (!isTest) await sendControlMsg(`✅ Sent Vidya-Avidya poll to *${binding.groupName || destJid}*.`);
+    return;
+  }
+
+  if (cmd === '#schedule' && fullAuth) {
+    const raw = text.trim().slice('#schedule'.length).trim();
+    const segs = raw.split('|').map((x) => x.trim());
+    if (segs.length < 3) {
+      return sendControlMsg('Usage:\n`#schedule DD/MM/YY HH:MM | here | Message or #cmd`\n`#schedule HH:MM daily | bindKey | Message or #cmd`');
+    }
+    const [timePart, targetPart, ...payloadParts] = segs;
+    const payload = payloadParts.join(' | ');
+    const isDaily = /daily$/i.test(timePart);
+    const runAtIST = timePart.replace(/\s*daily$/i, '').trim();
+    const repeat = isDaily ? 'DAILY' : 'ONCE';
+    let targetJid = chatJid;
+    if (targetPart.toLowerCase() !== 'here') {
+      const b = state.bindings.find((x) => x.bindKey === targetPart);
+      targetJid = b?.groupJid || targetPart;
+    }
+    const id = 'SCH' + Date.now().toString().slice(-5);
+    await google.appendRow(MASTER_SHEET_ID, 'Custom_Schedules', [id, targetJid, payload, runAtIST, repeat, 'ACTIVE']);
+    state.customSchedules.push({ id, targetJid, payload, runAtIST, repeat, status: 'ACTIVE' });
+    return sendControlMsg(`⏰ Scheduled *${id}* (${repeat} at \`${runAtIST}\` IST).`);
+  }
+
+  if (cmd === '#schedules' && fullAuth) {
+    if (!state.customSchedules.length) return sendControlMsg('No active custom schedules.');
+    const lines = state.customSchedules.map((s) => `• *${s.id}* (${s.repeat} @ \`${s.runAtIST}\`): ${s.payload.slice(0, 40)}`);
+    return sendControlMsg(`*Active Custom Schedules:*\n${lines.join('\n')}\n\nUse \`#unschedule <ID>\` to cancel.`);
+  }
+
+  if (cmd === '#unschedule' && fullAuth) {
+    const id = (args[0] || '').trim();
+    const rows = await google.getRows(MASTER_SHEET_ID, 'Custom_Schedules!A2:F');
+    const idx = rows.findIndex((r) => (r[0] || '').trim() === id);
+    if (idx < 0) return sendControlMsg(`Schedule \`${id}\` not found.`);
+    await google.updateRange(MASTER_SHEET_ID, `Custom_Schedules!F${idx + 2}`, [['DONE']]);
+    state.customSchedules = state.customSchedules.filter((s) => s.id !== id);
+    return sendControlMsg(`🗑️ Cancelled schedule *${id}*.`);
+  }
+
+  if (cmd === '#gita' && isAuthorized(senderJid, channel, 'gita_attendance')) {
+    const baseBinding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
+    if (!baseBinding) return sendControlMsg('⚠️ `gita_attendance` binding row missing in Master Sheet.');
+
+    const isTest = args[0]?.toLowerCase() === 'test';
+    const cleanArgs = isTest ? args.slice(1) : args;
+    const binding = isTest
+      ? { ...baseBinding, bindKey: 'gita_test', groupJid: chatJid }
+      : baseBinding;
+
+    if (!binding.groupJid) return sendControlMsg('⚠️ `gita_attendance` is not bound to a group yet. Use `#find` and `#bind`.');
+
+    const dateMatch = cleanArgs[0] && /^\d{2}\/\d{2}\/\d{2}$/.test(cleanArgs[0]) ? cleanArgs[0] : null;
+    const targetDate = dateMatch || formatISTDate();
+    const sessionOverride = dateMatch ? cleanArgs.slice(1).join(' ') : cleanArgs.join(' ');
+    await sendControlMsg('⏳ Command received, preparing poll...');
+    const fourth = await generateTauntOption(sessionOverride || 'Today');
+
+    const res = await gita.dispatchGitaPoll({
+      sendPoll,
+      sendControlMsg,
+      binding,
+      targetDate,
+      sessionOverride: sessionOverride || undefined,
+      fourthOptionOverride: fourth,
+      force: isTest,
+    });
+
+    if (res.status === 'SENT' && !isTest) {
+      await sendControlMsg(`✅ Sent Gita poll (*${res.dateStr}* — *${res.sessionName || 'Session'}*) to *${binding.groupName || binding.groupJid}*.`);
+    } else if (res.status === 'ALREADY_SENT') {
+      const msg = await sendControlMsg(`⚠️ Gita poll for *${targetDate}* was already sent today. Quote-reply *Yes* to send again.`);
+      if (msg?.key?.id) {
+        state.pendingPrompts.set(msg.key.id, {
+          type: 'CONFIRM_DUPLICATE_POLL',
+          sendPoll,
+          sendControlMsg,
+          binding,
+          targetDate,
+          sessionOverride: sessionOverride || undefined,
+        });
+      }
+    }
+  }
+}
+
+module.exports = { processIncomingMessage };& fullAuth) {
     const key = args[0];
     if (key) {
       await saveSetting(`PAUSED_${key}`, 'FALSE', `Pause schedule for ${key}`);
