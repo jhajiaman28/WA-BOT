@@ -154,6 +154,17 @@ async function syncAuthToSheet() {
   await updateRange(MASTER_SHEET_ID, 'WA_Session!A1', rows, 'RAW');
 }
 
+
+async function clearAuthInSheet() {
+  try {
+    const sheets = initSheetsClient();
+    await sheets.spreadsheets.values.clear({ spreadsheetId: MASTER_SHEET_ID, range: 'WA_Session!A2:B' });
+    console.log('[Session] Cleared stale WA_Session from Master Sheet.');
+  } catch (err) {
+    console.error('[Session Clear]', err.message);
+  }
+}
+
 module.exports = {
   colIndexToLetter,
   getRows,
@@ -165,5 +176,6 @@ module.exports = {
   processRetryQueue,
   restoreAuthFromDrive,
   scheduleAuthSyncToDrive,
+  clearAuthInSheet,
   getRetryCount: () => retryQueue.length,
 };
