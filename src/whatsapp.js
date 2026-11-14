@@ -1,3 +1,4 @@
+const fs = require('fs');
 const crypto = require('crypto');
 const {
   default: makeWASocket,
@@ -19,6 +20,7 @@ const gita = require('./categories/gitaAttendance');
 let sock = null;
 let latestQRDataUrl = null;
 let isConnected = false;
+let hasNotifiedStartup = false;
 const messageStore = new Map();
 const dispatchQueue = [];
 let dispatching = false;
@@ -138,7 +140,10 @@ async function startWhatsApp() {
       isConnected = true;
       latestQRDataUrl = null;
       console.log('[WhatsApp] Connected.');
-      await sendControlMsg('🔄 Bot is online and monitoring.');
+      if (!hasNotifiedStartup) {
+        hasNotifiedStartup = true;
+        await sendControlMsg('🔄 Bot is online and monitoring.');
+      }
     }
     if (connection === 'close') {
       isConnected = false;
@@ -146,7 +151,10 @@ async function startWhatsApp() {
       if (code !== DisconnectReason.loggedOut) {
         setTimeout(() => startWhatsApp().catch(console.error), 5000);
       } else {
-        console.error('[WhatsApp] Logged out. Scan QR at /qr.');
+        console.error('[WhatsApp] Logged out. Clearing stale session & generating fresh QR...');
+        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        await google.clearAuthInSheet();
+        setTimeout(() => startWhatsApp().catch(console.error), 3000);
       }
     }
   });
