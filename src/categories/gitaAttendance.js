@@ -28,7 +28,10 @@ function buildPollPayload(dateStr, sessionName, fourthOption = '😒Not Interest
   const lower = (sessionName || '').toLowerCase();
   const omitSlept = lower.includes('exam session') || lower.includes('exclusive session');
   const options = ['✅Joined', '❌Busy/Slept/Forget'];
-  if (!omitSlept) options.push('😴Slept During Session');
+  if (!omitSlept) {
+    options.push('😴Slept During Session');
+    options.push('⏳Could not join Full Session');
+  }
   options.push(fourthOption || '😒Not Interested');
 
   const question = sessionName ? `${dateStr} - *${sessionName}*` : `${dateStr} - *Today's Session*`;
@@ -37,7 +40,7 @@ function buildPollPayload(dateStr, sessionName, fourthOption = '😒Not Interest
 
 function mapOptionToSymbol(selectedOption = '') {
   if (selectedOption === '__UNVOTE__') return '➖';
-  if (selectedOption.includes('Joined') || selectedOption.includes('Slept During Session')) return '✅';
+  if (selectedOption.includes('Joined') || selectedOption.includes('Slept During Session') || selectedOption.includes('Could not join Full Session')) return '✅';
   return '❌';
 }
 
@@ -80,7 +83,10 @@ async function dispatchGitaPoll({ sendPoll, sendControlMsg, binding, targetDate,
   const sessionName = sessionOverride || found.sessionName;
   const payload = buildPollPayload(dateStr, sessionName, fourthOptionOverride);
   const sent = await sendPoll(binding.groupJid, payload);
-  if (!sent?.key?.id) return { status: 'SEND_FAILED' };
+  if (!sent?.key?.id) {
+    await sendControlMsg(`⚠️ Failed to send Gita poll for *${dateStr}* (WhatsApp socket not ready).`);
+    return { status: 'SEND_FAILED' };
+  }
 
   state.dailySentFlags.add(flagKey);
 
@@ -128,6 +134,8 @@ async function markMemberVote({ poll, officialName, symbol, sendControlMsg }) {
 
   const matches = members.filter((m) => m.name.toLowerCase() === officialName.trim().toLowerCase());
   if (matches.length === 1) {
+    const prevVal = (rows[dateRow.rowNum - 1]?.[matches[0].colIndex] || '').trim();
+    if (prevVal === symbol) return;
     const cell = `${poll.targetTab}!${matches[0].colLetter}${dateRow.rowNum}`;
     await google.safeExecute(
       () => google.updateRange(poll.targetSheetId, cell, [[symbol]], 'RAW'),
@@ -360,13 +368,14 @@ async function pruneOldLogs() {
     }
   } catch {}
 
-  // Prune Gita_Vote_Logs older than retentionDays
+  // Prune Gita_Vote_Logs older than 10 days
   try {
+    const logCutoff = Date.now() - 10 * 86400000;
     const logRows = await google.getRows(MASTER_SHEET_ID, 'Gita_Vote_Logs!A2:F');
-    const hasOld = logRows.some((r) => r[0] && Number(r[0]) < cutoff);
-    if (hasOld) {
-      const cleaned = logRows.map((r) => (r[0] && Number(r[0]) < cutoff) ? Array(6).fill('') : r);
-      await google.updateRange(MASTER_SHEET_ID, 'Gita_Vote_Logs!A2:F' + (logRows.length + 1), cleaned, 'RAW');
+    const kept = logRows.filter((r) => r[0] && Number(r[0]) >= logCutoff);
+    if (kept.length < logRows.length) {
+      const padded = [...kept, ...Array(logRows.length - kept.length).fill(Array(6).fill(''))];
+      await google.updateRange(MASTER_SHEET_ID, 'Gita_Vote_Logs!A2:F' + (logRows.length + 1), padded, 'RAW');
     }
   } catch {}
 }
