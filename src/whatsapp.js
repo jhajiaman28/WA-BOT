@@ -59,7 +59,10 @@ async function sendControlMsg(text) {
 }
 
 async function sendPoll(groupJid, { question, options, selectableCount = 1 }) {
-  if (!sock) return null;
+  if (!sock || !isConnected) {
+    console.error('[sendPoll] Aborted: WhatsApp socket not connected.');
+    return null;
+  }
   const sent = await sock.sendMessage(groupJid, {
     poll: { name: question, values: options, selectableCount },
   });
