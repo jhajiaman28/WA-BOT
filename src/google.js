@@ -144,7 +144,17 @@ function scheduleAuthSyncToDrive() {
 async function syncAuthToSheet() {
   if (!fs.existsSync(AUTH_DIR)) return;
   const sheets = initSheetsClient();
-  const files = fs.readdirSync(AUTH_DIR).filter((f) => fs.statSync(path.join(AUTH_DIR, f)).isFile());
+  let files = fs.readdirSync(AUTH_DIR).filter((f) => fs.statSync(path.join(AUTH_DIR, f)).isFile());
+  const preKeys = files.filter((f) => f.startsWith('pre-key-')).sort((a, b) => {
+    const na = parseInt(a.replace(/\D/g, ''), 10) || 0;
+    const nb = parseInt(b.replace(/\D/g, ''), 10) || 0;
+    return na - nb;
+  });
+  if (preKeys.length > 60) {
+    const toRemove = preKeys.slice(0, preKeys.length - 60);
+    for (const f of toRemove) fs.unlinkSync(path.join(AUTH_DIR, f));
+    files = files.filter((f) => !toRemove.includes(f));
+  }
   const rows = [['File_Name', 'Data']];
   for (const name of files) {
     const content = fs.readFileSync(path.join(AUTH_DIR, name), 'utf8');
