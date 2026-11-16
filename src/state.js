@@ -9,6 +9,7 @@ const state = {
   activePolls: new Map(),
   voteCache: new Map(),
   customSchedules: [],
+  templates: [],
   pendingPrompts: new Map(),
   listeners: new Map(),
   chatHistory: new Map(),
@@ -18,13 +19,14 @@ const state = {
 };
 
 async function loadMasterState() {
-  const [settingsRows, bindingRows, permRows, memberRows, pollRows, schedRows] = await Promise.all([
+  const [settingsRows, bindingRows, permRows, memberRows, pollRows, schedRows, tplRows] = await Promise.all([
     google.getRows(MASTER_SHEET_ID, 'Settings!A2:C'),
     google.getRows(MASTER_SHEET_ID, 'Group_Bindings!A2:H'),
     google.getRows(MASTER_SHEET_ID, 'Admin_Permissions!A2:E'),
     google.getRows(MASTER_SHEET_ID, 'Member_Registry!A2:E'),
     google.getRows(MASTER_SHEET_ID, 'Active_Polls!A2:J'),
     google.getRows(MASTER_SHEET_ID, 'Custom_Schedules!A2:F').catch(() => []),
+    google.getRows(MASTER_SHEET_ID, 'Templates!A2:E').catch(() => []),
   ]);
 
   state.settings = {};
@@ -76,6 +78,15 @@ async function loadMasterState() {
       });
     }
   });
+
+  state.templates = tplRows.filter((r) => r[0]).map((r, i) => ({
+    rowNum: i + 2,
+    nickname: (r[0] || '').trim(),
+    text: (r[1] || '').trim(),
+    version: Number(r[2] || 1),
+    status: (r[3] || 'ACTIVE').trim().toUpperCase(),
+    updatedAt: (r[4] || '').trim(),
+  }));
 
   state.customSchedules = schedRows.filter((r) => r[0] && r[5] !== 'DONE').map((r) => ({
     id: (r[0] || '').trim(),
