@@ -50,6 +50,29 @@ async function sendGroupText(groupJid, text) {
   return sent;
 }
 
+async function editControlMsg(msgKey, newText) {
+  const jid = state.settings.CONTROL_GROUP_JID;
+  if (!sock || !jid || !isConnected) return false;
+  try {
+    await sock.sendMessage(jid, { text: newText, edit: msgKey });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sendDM(targetJid, text) {
+  if (!sock || !targetJid || !isConnected) return false;
+  try {
+    const sent = await sock.sendMessage(targetJid, { text });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+    return Boolean(sent?.key?.id);
+  } catch (err) {
+    console.error('[sendDM]', err.message);
+    return false;
+  }
+}
+
 async function sendControlMsg(text) {
   const jid = state.settings.CONTROL_GROUP_JID;
   if (!sock || !jid) return null;
@@ -206,7 +229,7 @@ async function startWhatsApp() {
         const senderJid = jidNormalizedUser(msg.key.fromMe ? sock.user?.id : (msg.key.participant || chatJid));
         const quotedId = msg.message.extendedTextMessage?.contextInfo?.stanzaId || null;
 
-        await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll });
+        await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg });
       } catch (err) {
         console.error('[WA Message Error]', err);
         await sendControlMsg(`⚠️ Error: ${err.message}`).catch(() => {});
@@ -245,7 +268,7 @@ async function startWhatsApp() {
           || update.message?.editedMessage?.message?.extendedTextMessage?.text;
         if (editedText && !state.sentMsgIds.has(key.id)) {
           const senderJid = jidNormalizedUser(key.fromMe ? sock.user?.id : (key.participant || key.remoteJid));
-          await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll });
+          await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg });
         }
       } catch (err) {
         console.error('[WA Update Error]', err);
@@ -301,6 +324,8 @@ module.exports = {
   startWhatsApp,
   sendGroupText,
   sendControlMsg,
+  editControlMsg,
+  sendDM,
   sendPoll,
   enqueuePoll,
   getStatus: () => ({ isConnected, latestQRDataUrl }),
