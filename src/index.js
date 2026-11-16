@@ -3,9 +3,10 @@ const cron = require('node-cron');
 const { PORT, TZ, MASTER_SHEET_ID, getISTNow, formatISTDate } = require('./config');
 const google = require('./google');
 const { state, loadMasterState, isPaused } = require('./state');
-const { startWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus, sendGroupText } = require('./whatsapp');
+const { startWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus, sendGroupText, sendDM, editControlMsg } = require('./whatsapp');
 const gita = require('./categories/gitaAttendance');
 const dailyPosts = require('./categories/dailyPosts');
+const reminders = require('./reminders');
 const { processIncomingMessage } = require('./commands');
 const { generateTauntOption } = require('./ai');
 
@@ -33,8 +34,8 @@ function setupCrons() {
     );
   }, { timezone: TZ });
 
-  // 9:45 PM IST Session Name Confirmation
-  cron.schedule('45 21 * * *', async () => {
+  // 9:00 PM IST Session Name Confirmation
+  cron.schedule('0 21 * * *', async () => {
     if (isPaused('gita_attendance')) return;
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
     if (binding?.groupJid) await gita.askSessionConfirmation(sendControlMsg, binding);
@@ -83,11 +84,16 @@ function setupCrons() {
     if (binding?.groupJid) await sendGroupText(binding.groupJid, dailyPosts.buildStudyTrackerText());
   }, { timezone: TZ });
 
-  // 6:00 PM IST Vidya-Avidya Poll (for same day)
+  // 6:00 PM IST Vidya-Avidya Poll + Gita Inactive Reminder Check
   cron.schedule('0 18 * * *', async () => {
-    if (isPaused('vidya_avidya')) return;
-    const binding = state.bindings.find((b) => b.bindKey === 'vidya_avidya');
-    if (binding?.groupJid) await sendPoll(binding.groupJid, dailyPosts.buildVidyaPollPayload());
+    if (!isPaused('vidya_avidya')) {
+      const vidya = state.bindings.find((b) => b.bindKey === 'vidya_avidya');
+      if (vidya?.groupJid) await sendPoll(vidya.groupJid, dailyPosts.buildVidyaPollPayload());
+    }
+    if (!isPaused('gita_reminders')) {
+      const gitaBinding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
+      if (gitaBinding?.targetSheetId) await reminders.runDailyReminderCheck({ sendControlMsg, binding: gitaBinding });
+    }
   }, { timezone: TZ });
 
   // 3:00 AM IST Auto-prune logs older than retention days
@@ -117,9 +123,14 @@ function setupCrons() {
           sendControlMsg,
           sendPoll,
           enqueuePoll,
+          sendDM,
+          editControlMsg,
         }).catch(console.error);
       } else {
-        await sendGroupText(s.targetJid, s.payload).catch(console.error);
+        const msgText = s.payload.startsWith('@')
+          ? reminders.getTemplateText(s.payload.slice(1).trim())
+          : s.payload;
+        await sendGroupText(s.targetJid, msgText).catch(console.error);
       }
 
       if (s.repeat === 'ONCE') {
