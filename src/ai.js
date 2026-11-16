@@ -39,7 +39,7 @@ async function generateTauntOption(sessionName) {
   try {
     const raw = await Promise.race([
       generateWithFallback(
-        `Generate ONE short, witty, self-deprecating WhatsApp poll option (max 28 chars, starting with 1 emoji) for someone who skipped today's "${sessionName}" session.
+      `Generate ONE short, witty, self-deprecating WhatsApp poll option (max 28 chars, starting with 1 emoji) for someone who skipped today's "${sessionName}" session.
 Rules:
 - Must be written in FIRST PERSON (the voter playfully describing themselves, e.g., "🤡Jhunnuram Mode", "🫏Aaj Gadahva bana", "😒Not Interested").
 - May playfully use Acharya Prashant community terms like "Jhunnuram", "Gadahva", "Maya me phansa".
@@ -85,4 +85,27 @@ Always maintain a respectful tone (never use "tum" if using Hindi/Hinglish—onl
   }
 }
 
-module.exports = { generateTauntOption, handleAIConversation };
+
+async function adaptRepeatReminder(baseMessage, reminderNumber) {
+  if (!GEMINI_API_KEY || reminderNumber <= 1) return baseMessage;
+  try {
+    const raw = await Promise.race([
+      generateWithFallback(
+        `Slightly edit this WhatsApp reminder message to politely mention that this is reminder #${reminderNumber} (they were reminded earlier too).
+Rules:
+- Match the EXACT language, tone, and respectful "aap" style of the original message (never use "tum").
+- Keep the original message intact and only add/weave in one brief, polite reminder line.
+- Return ONLY the final message text.
+
+Original message:
+${baseMessage}`
+      ),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), 5000)),
+    ]);
+    return raw || baseMessage;
+  } catch {
+    return `${baseMessage}\n\n(Aapko pehle bhi remind karaya gaya tha, kripya apna vote zaroor dein.)`;
+  }
+}
+
+module.exports = { generateTauntOption, handleAIConversation, adaptRepeatReminder };
