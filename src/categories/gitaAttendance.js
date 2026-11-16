@@ -26,9 +26,13 @@ function findDateRow(rows, targetDate) {
 
 function buildPollPayload(dateStr, sessionName, fourthOption = '😒Not Interested') {
   const lower = (sessionName || '').toLowerCase();
-  const omitSlept = lower.includes('exam session') || lower.includes('exclusive session');
-  const options = ['✅Joined', '❌Busy/Slept/Forget'];
-  if (!omitSlept) {
+  const isExam = lower.includes('exam session');
+  const isExclusive = lower.includes('exclusive session');
+  const options = isExam
+    ? ['✅Attempted Both', '🌱Attempted - Novice/नवशिक्षु', '🔰Attempted - Beginner/आरंभक', '❌Busy/Slept/Forget']
+    : ['✅Joined', '❌Busy/Slept/Forget'];
+
+  if (!isExam && !isExclusive) {
     options.push('😴Slept During Session');
     options.push('⏳Could not join Full Session');
   }
@@ -40,7 +44,7 @@ function buildPollPayload(dateStr, sessionName, fourthOption = '😒Not Interest
 
 function mapOptionToSymbol(selectedOption = '') {
   if (selectedOption === '__UNVOTE__') return '➖';
-  if (selectedOption.includes('Joined') || selectedOption.includes('Slept During Session') || selectedOption.includes('Could not join Full Session')) return '✅';
+  if (selectedOption.includes('Joined') || selectedOption.includes('Attempted') || selectedOption.includes('Slept During Session') || selectedOption.includes('Could not join Full Session')) return '✅';
   return '❌';
 }
 
@@ -53,7 +57,7 @@ async function askSessionConfirmation(sendControlMsg, binding) {
   const session = found?.sessionName || '(Blank in sheet)';
 
   const msg = await sendControlMsg(
-    `⏰ *9:45 PM Check (${today})*\nSession in sheet: *${session}*\n\nQuote-reply with a new session name to override, *OK* to confirm, or *Cancel* to skip tonight's poll. (Auto-sends at 10:00 PM if unchanged.)`
+    `⏰ *9:00 PM Check (${today})*\nSession in sheet: *${session}*\n\nQuote-reply with a new session name to override, *OK* to confirm, or *Cancel* to skip tonight's poll. (Auto-sends at 10:00 PM if unchanged.)`
   );
   if (msg?.key?.id) {
     state.pendingPrompts.set(msg.key.id, {
@@ -65,7 +69,7 @@ async function askSessionConfirmation(sendControlMsg, binding) {
   }
 }
 
-async function dispatchGitaPoll({ sendPoll, sendControlMsg, binding, targetDate, sessionOverride, fourthOptionOverride, force = false }) {
+async function dispatchGitaPoll({ sendPoll, sendControlMsg, binding, targetDate, sessionOverride, fourthOptionOverride, force = false, isTest = false }) {
   const dateStr = targetDate || formatISTDate();
   const flagKey = `${binding.bindKey}:${dateStr}`;
 
@@ -87,6 +91,8 @@ async function dispatchGitaPoll({ sendPoll, sendControlMsg, binding, targetDate,
     await sendControlMsg(`⚠️ Failed to send Gita poll for *${dateStr}* (WhatsApp socket not ready).`);
     return { status: 'SEND_FAILED' };
   }
+
+  if (isTest) return { status: 'SENT', dateStr, sessionName };
 
   state.dailySentFlags.add(flagKey);
 
