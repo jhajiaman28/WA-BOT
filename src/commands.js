@@ -2,6 +2,7 @@ const { MASTER_SHEET_ID, formatISTDate, formatISTTimestamp, normalizePhone } = r
 const google = require('./google');
 const { state, loadMasterState, saveSetting, registerMember, isFullAuthority, isAuthorized } = require('./state');
 const gita = require('./categories/gitaAttendance');
+const reminders = require('./reminders');
 const dailyPosts = require('./categories/dailyPosts');
 const { generateTauntOption, handleAIConversation } = require('./ai');
 
@@ -10,22 +11,24 @@ const HELP_TEXT = `*BOT COMMANDS*
 *Polls, Posts & Reports*
 • \`#gita [test] [DD/MM/YY] [Session]\` — Gita attendance poll
 • \`#daily / #weekly [test] [DD/MM/YY]\` — Attendance report
-• \`#study [test] [DD/MM/YY]\` — Study Tracker post
-• \`#vidya [test] [DD/MM/YY]\` — Vidya-Avidya poll
+• \`#study / #vidya [test] [DD/MM/YY]\` — Study Tracker / Vidya poll
 • \`#sync_votes\` — Re-check & fix sheet votes
 
+*Reminders & Saved Messages*
+• \`#reminders\` — Run inactive-member reminder check now
+• \`#dnd add|remove <Name>\` — Toggle No-DM flag
+• \`#save_msg <name>\` + text — Save message (keeps old versions)
+• \`#msgs\` / \`#del_msg <name> [old]\` — View or delete saved msgs
+
 *Scheduling & Pause*
-• \`#schedule <DD/MM/YY HH:MM | HH:MM daily> | <here|bindKey> | <msg|#cmd>\` — Schedule post/cmd
+• \`#schedule <DD/MM/YY HH:MM | HH:MM daily> | <here|key> | <msg|@name|#cmd>\`
 • \`#schedules / #unschedule <id>\` — List or cancel schedules
-• \`#pause_polls / #resume_polls [key]\` — Pause all or specific (e.g. \`study_tracker\`)
+• \`#pause_polls / #resume_polls [key]\` — Pause all or specific
 
-*Groups & Members*
-• \`#find [keyword|all]\` — Search groups
-• \`#bind <#> <bindKey>\` — Link group (\`gita_attendance\`, \`study_tracker\`, \`vidya_avidya\`)
+*Groups, Members & System*
+• \`#find [keyword|all]\` / \`#bind <#> <bindKey>\` — Link groups
 • \`#register\` — Bulk add members (phone + name/line)
-• \`#admin add <phone> [FULL|LIMITED] [cats]\` / \`remove <phone>\` — Access
-
-*System & Controls*
+• \`#admin add <phone> [FULL|LIMITED] [cats]\` / \`remove <phone>\`
 • \`#status\` / \`#sync\` — Health & reload Master Sheet
 • \`#listen [15m|5|forever]\` / \`#stop\` — Chat listener
 • \`#set_control_group\` / \`#help\` — Setup & help`;
@@ -78,7 +81,7 @@ async function stopListener(chatJid, reason, sendControlMsg) {
   await sendControlMsg(`⏹️ Listening stopped (${reason}). Cleared ${stopped} active listener(s).`);
 }
 
-async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePoll }) {
+async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePoll, sendDM, editControlMsg }) {
   const prompt = state.pendingPrompts.get(quotedId);
   if (!prompt) return false;
   const txt = replyText.trim();
@@ -167,6 +170,12 @@ async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePo
     return true;
   }
 
+  if (prompt.type === 'CONFIRM_REMINDERS') {
+    state.pendingPrompts.delete(quotedId);
+    await reminders.processReminderReply({ prompt, replyText: txt, sendControlMsg, sendDM, editControlMsg });
+    return true;
+  }
+
   if (prompt.type === 'CONFIRM_EXIT') {
     state.pendingPrompts.delete(quotedId);
     const updated = /^yes$/i.test(txt) ? 'CONFIRMED' : 'SKIPPED';
@@ -186,13 +195,13 @@ async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePo
   return false;
 }
 
-async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll }) {
+async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg }) {
   const controlJid = state.settings.CONTROL_GROUP_JID;
   const isControlGroup = controlJid && chatJid === controlJid;
   const isCommand = text.trim().startsWith('#');
 
   if (isControlGroup && quotedId && isAuthorized(senderJid, 'CONTROL')) {
-    const handled = await handleQuoteReply({ quotedId, replyText: text, sendControlMsg, enqueuePoll });
+    const handled = await handleQuoteReply({ quotedId, replyText: text, sendControlMsg, enqueuePoll, sendDM, editControlMsg });
     if (handled) return;
   }
 
@@ -431,6 +440,80 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     return sendControlMsg(`🗑️ Cancelled schedule *${id}*.`);
   }
 
+  if (cmd === '#save_msg' && fullAuth) {
+    const nickname = (args[0] || '').trim();
+    const body = text.split(/\r?\n/).slice(1).join('\n').trim();
+    if (!nickname || !body) {
+      return sendControlMsg('Usage:\n`#save_msg nickname`\nYour message text here...');
+    }
+    const rows = await google.getRows(MASTER_SHEET_ID, 'Templates!A2:E').catch(() => []);
+    let maxVer = 0;
+    for (let i = 0; i < rows.length; i++) {
+      if ((rows[i][0] || '').trim().toLowerCase() === nickname.toLowerCase()) {
+        maxVer = Math.max(maxVer, Number(rows[i][2] || 1));
+        if ((rows[i][3] || '').toUpperCase() === 'ACTIVE') {
+          await google.updateRange(MASTER_SHEET_ID, `Templates!D${i + 2}`, [['OLD']], 'RAW');
+        }
+      }
+    }
+    const newVer = maxVer + 1;
+    await google.appendRow(MASTER_SHEET_ID, 'Templates', [nickname, body, String(newVer), 'ACTIVE', formatISTTimestamp()]);
+    await loadMasterState();
+    return sendControlMsg(`💾 Saved *${nickname}* (v${newVer} ACTIVE${maxVer ? `, v${maxVer} kept as OLD` : ''}).`);
+  }
+
+  if (cmd === '#msgs' && fullAuth) {
+    if (!state.templates.length) return sendControlMsg('No saved messages yet. Use `#save_msg <name>`.');
+    const grouped = new Map();
+    for (const t of state.templates) {
+      if (!grouped.has(t.nickname)) grouped.set(t.nickname, []);
+      grouped.get(t.nickname).push(t);
+    }
+    const blocks = [];
+    for (const [name, list] of grouped.entries()) {
+      const sorted = [...list].sort((a, b) => b.version - a.version);
+      const lines = sorted.map((t) => `[${t.status} v${t.version}] ${t.text}`);
+      blocks.push(`*${name}*\n${lines.join('\n')}`);
+    }
+    return sendControlMsg(`📚 *Saved Messages:*\n\n${blocks.join('\n\n')}`);
+  }
+
+  if (cmd === '#del_msg' && fullAuth) {
+    const nickname = (args[0] || '').trim().toLowerCase();
+    const onlyOld = (args[1] || '').toLowerCase() === 'old';
+    if (!nickname) return sendControlMsg('Usage: `#del_msg <nickname> [old]`');
+    const rows = await google.getRows(MASTER_SHEET_ID, 'Templates!A2:E').catch(() => []);
+    const kept = rows.filter((r) => {
+      const match = (r[0] || '').trim().toLowerCase() === nickname;
+      if (!match) return true;
+      return onlyOld ? (r[3] || '').toUpperCase() === 'ACTIVE' : false;
+    });
+    const padded = [...kept, ...Array(Math.max(0, rows.length - kept.length)).fill(Array(5).fill(''))];
+    if (rows.length) await google.updateRange(MASTER_SHEET_ID, `Templates!A2:E${rows.length + 1}`, padded, 'RAW');
+    await loadMasterState();
+    return sendControlMsg(`🗑️ Deleted ${onlyOld ? 'old versions of ' : ''}*${nickname}*.`);
+  }
+
+  if (cmd === '#dnd' && fullAuth) {
+    const sub = (args[0] || '').toLowerCase();
+    const name = args.slice(1).join(' ').trim();
+    if (!['add', 'remove'].includes(sub) || !name) return sendControlMsg('Usage: `#dnd add|remove <Name>`');
+    const tracker = await reminders.loadTracker();
+    const rec = tracker.find((t) => t.name.toLowerCase() === name.toLowerCase()) || {
+      name, count: 0, lastDate: '', step: 0, dnd: false, mode: 'NORMAL',
+    };
+    rec.dnd = sub === 'add';
+    await reminders.saveTrackerEntry(rec);
+    return sendControlMsg(`🔕 No-DM for *${rec.name}*: *${rec.dnd ? 'ON' : 'OFF'}*.`);
+  }
+
+  if (cmd === '#reminders' && fullAuth) {
+    const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
+    if (!binding) return sendControlMsg('⚠️ `gita_attendance` binding missing.');
+    await reminders.runDailyReminderCheck({ sendControlMsg, binding });
+    return;
+  }
+
   if (cmd === '#gita' && isAuthorized(senderJid, channel, 'gita_attendance')) {
     const baseBinding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
     if (!baseBinding) return sendControlMsg('⚠️ `gita_attendance` binding row missing in Master Sheet.');
@@ -457,6 +540,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
       sessionOverride: sessionOverride || undefined,
       fourthOptionOverride: fourth,
       force: isTest,
+      isTest,
     });
 
     if (res.status === 'SENT' && !isTest) {
