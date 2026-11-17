@@ -21,6 +21,7 @@ let sock = null;
 let latestQRDataUrl = null;
 let isConnected = false;
 let hasNotifiedStartup = false;
+let heartbeatTimer = null;
 const messageStore = new Map();
 const dispatchQueue = [];
 let dispatching = false;
@@ -159,6 +160,22 @@ async function startWhatsApp() {
     await saveCreds();
     google.scheduleAuthSyncToDrive();
   });
+
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(async () => {
+    if (!sock || !isConnected) return;
+    try {
+      await Promise.race([
+        sock.query({ tag: 'iq', attrs: { to: '@s.whatsapp.net', type: 'get', xmlns: 'w:p' } }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('WA ping timeout')), 10000)),
+      ]);
+    } catch (err) {
+      console.error('[Heartbeat] Zombie socket detected, reconnecting:', err.message);
+      isConnected = false;
+      try { sock.end(err); } catch {}
+      setTimeout(() => startWhatsApp().catch(console.error), 5000);
+    }
+  }, 600000);
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) latestQRDataUrl = await QRCode.toDataURL(qr);
@@ -319,6 +336,7 @@ async function startWhatsApp() {
     }
   });
 }
+
 
 module.exports = {
   startWhatsApp,
