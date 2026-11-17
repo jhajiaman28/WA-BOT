@@ -283,7 +283,12 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
 
   if (cmd === '#find' && fullAuth) {
     const query = args.join(' ').toLowerCase();
-    const allGroups = Object.values(await sock.groupFetchAllParticipating());
+    await sendControlMsg('🔍 Searching groups...');
+    const rawGroups = await Promise.race([
+      sock.groupFetchAllParticipating(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('WhatsApp group fetch timed out')), 15000)),
+    ]);
+    const allGroups = Object.values(rawGroups);
     lastGroupSearch = (!query || query === 'all')
       ? allGroups
       : allGroups.filter((g) => (g.subject || '').toLowerCase().includes(query));
@@ -378,27 +383,45 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
   }
 
   if (cmd === '#study' && isAuthorized(senderJid, channel, 'study_tracker')) {
-    const binding = state.bindings.find((b) => b.bindKey === 'study_tracker');
+    const bindings = state.bindings.filter((b) => (b.bindKey === 'study_tracker' || b.category === 'study_tracker') && b.groupJid);
     const isTest = args[0]?.toLowerCase() === 'test';
     const dateArg = (isTest ? args[1] : args[0]) || '';
     const targetDate = /^\d{2}\/\d{2}\/\d{2}$/.test(dateArg) ? dateArg : undefined;
-    const destJid = isTest ? chatJid : binding?.groupJid;
-    if (!destJid) return sendControlMsg('⚠️ `study_tracker` is not bound to a group yet. Use `#find` and `#bind`.');
-    const sent = await sock.sendMessage(destJid, { text: dailyPosts.buildStudyTrackerText(targetDate) });
-    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
-    if (!isTest) await sendControlMsg(`✅ Sent Study Tracker to *${binding.groupName || destJid}*.`);
+    const textBody = dailyPosts.buildStudyTrackerText(targetDate);
+    if (isTest) {
+      const sent = await sock.sendMessage(chatJid, { text: textBody });
+      if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+      return;
+    }
+    if (!bindings.length) return sendControlMsg('⚠️ `study_tracker` is not bound to any group yet. Use `#find` and `#bind`.');
+    for (const b of bindings) {
+      enqueuePoll(async () => {
+        const sent = await sock.sendMessage(b.groupJid, { text: textBody });
+        if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+        await sendControlMsg(`✅ Sent Study Tracker to *${b.groupName || b.groupJid}*.`);
+      });
+    }
     return;
   }
 
   if (cmd === '#vidya' && isAuthorized(senderJid, channel, 'vidya_avidya')) {
-    const binding = state.bindings.find((b) => b.bindKey === 'vidya_avidya');
+    const bindings = state.bindings.filter((b) => (b.bindKey === 'vidya_avidya' || b.category === 'vidya_avidya') && b.groupJid);
     const isTest = args[0]?.toLowerCase() === 'test';
     const dateArg = (isTest ? args[1] : args[0]) || '';
     const targetDate = /^\d{2}\/\d{2}\/\d{2}$/.test(dateArg) ? dateArg : undefined;
-    const destJid = isTest ? chatJid : binding?.groupJid;
-    if (!destJid) return sendControlMsg('⚠️ `vidya_avidya` is not bound to a group yet. Use `#find` and `#bind`.');
-    await sendPoll(destJid, dailyPosts.buildVidyaPollPayload(targetDate));
-    if (!isTest) await sendControlMsg(`✅ Sent Vidya-Avidya poll to *${binding.groupName || destJid}*.`);
+    const payload = dailyPosts.buildVidyaPollPayload(targetDate);
+    if (isTest) {
+      await sendPoll(chatJid, payload);
+      return;
+    }
+    if (!bindings.length) return sendControlMsg('⚠️ `vidya_avidya` is not bound to any group yet. Use `#find` and `#bind`.');
+    for (const b of bindings) {
+      enqueuePoll(async () => {
+        const sent = await sendPoll(b.groupJid, payload);
+        if (sent?.key?.id) await sendControlMsg(`✅ Sent Vidya-Avidya poll to *${b.groupName || b.groupJid}*.`);
+        else await sendControlMsg(`⚠️ Failed to send Vidya-Avidya poll to *${b.groupName || b.groupJid}*.`);
+      });
+    }
     return;
   }
 
