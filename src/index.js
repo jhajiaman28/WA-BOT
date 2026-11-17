@@ -80,15 +80,26 @@ function setupCrons() {
   // 12:00 AM IST Study Tracker Post (for previous day)
   cron.schedule('0 0 * * *', async () => {
     if (isPaused('study_tracker')) return;
-    const binding = state.bindings.find((b) => b.bindKey === 'study_tracker');
-    if (binding?.groupJid) await sendGroupText(binding.groupJid, dailyPosts.buildStudyTrackerText());
+    const bindings = state.bindings.filter((b) => (b.bindKey === 'study_tracker' || b.category === 'study_tracker') && b.groupJid);
+    for (const b of bindings) {
+      enqueuePoll(async () => {
+        const sent = await sendGroupText(b.groupJid, dailyPosts.buildStudyTrackerText());
+        if (!sent?.key?.id) await sendControlMsg(`⚠️ Failed to send Study Tracker to *${b.groupName || b.groupJid}*.`);
+      });
+    }
   }, { timezone: TZ });
 
   // 6:00 PM IST Vidya-Avidya Poll + Gita Inactive Reminder Check
   cron.schedule('0 18 * * *', async () => {
     if (!isPaused('vidya_avidya')) {
-      const vidya = state.bindings.find((b) => b.bindKey === 'vidya_avidya');
-      if (vidya?.groupJid) await sendPoll(vidya.groupJid, dailyPosts.buildVidyaPollPayload());
+      const vidyaBindings = state.bindings.filter((b) => (b.bindKey === 'vidya_avidya' || b.category === 'vidya_avidya') && b.groupJid);
+      const payload = dailyPosts.buildVidyaPollPayload();
+      for (const b of vidyaBindings) {
+        enqueuePoll(async () => {
+          const sent = await sendPoll(b.groupJid, payload);
+          if (!sent?.key?.id) await sendControlMsg(`⚠️ Failed to send 6:00 PM Vidya-Avidya poll to *${b.groupName || b.groupJid}*.`);
+        });
+      }
     }
     if (!isPaused('gita_reminders')) {
       const gitaBinding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
