@@ -94,6 +94,14 @@ async function dispatchGitaPoll({ sendPoll, sendControlMsg, binding, targetDate,
 
   if (isTest) return { status: 'SENT', dateStr, sessionName };
 
+  if (sessionOverride && sessionOverride.trim() !== found.sessionName) {
+    await google.safeExecute(
+      () => google.updateRange(binding.targetSheetId, `${binding.targetTab}!D${found.rowNum}`, [[sessionOverride.trim()]], 'RAW'),
+      `Session Override ${dateStr}`,
+      sendControlMsg
+    );
+  }
+
   state.dailySentFlags.add(flagKey);
 
   // Mark everyone with ➖ upon dispatch
