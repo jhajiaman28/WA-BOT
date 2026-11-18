@@ -22,6 +22,7 @@ let latestQRDataUrl = null;
 let isConnected = false;
 let hasNotifiedStartup = false;
 let heartbeatTimer = null;
+let isReconnecting = false;
 const messageStore = new Map();
 const dispatchQueue = [];
 let dispatching = false;
@@ -142,6 +143,19 @@ function tryDecryptVote(pu, msg, poll) {
   throw new Error('Could not decrypt vote with any JID combination');
 }
 
+function scheduleReconnect(reason = 'close') {
+  if (isReconnecting) return;
+  isReconnecting = true;
+  isConnected = false;
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  try { sock?.ev?.removeAllListeners(); } catch {}
+  try { sock?.end(new Error(reason)); } catch {}
+  setTimeout(() => {
+    isReconnecting = false;
+    startWhatsApp().catch(console.error);
+  }, 5000);
+}
+
 async function startWhatsApp() {
   await google.restoreAuthFromDrive();
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -171,9 +185,7 @@ async function startWhatsApp() {
       ]);
     } catch (err) {
       console.error('[Heartbeat] Zombie socket detected, reconnecting:', err.message);
-      isConnected = false;
-      try { sock.end(err); } catch {}
-      setTimeout(() => startWhatsApp().catch(console.error), 5000);
+      scheduleReconnect('heartbeat');
     }
   }, 600000);
 
@@ -192,7 +204,7 @@ async function startWhatsApp() {
       isConnected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code !== DisconnectReason.loggedOut) {
-        setTimeout(() => startWhatsApp().catch(console.error), 5000);
+        scheduleReconnect('close_' + (code || 'unknown'));
       } else {
         console.error('[WhatsApp] Logged out. Clearing stale session & generating fresh QR...');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
