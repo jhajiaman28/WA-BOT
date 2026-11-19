@@ -138,7 +138,7 @@ async function restoreAuthFromDrive() {
 let syncTimer = null;
 function scheduleAuthSyncToDrive() {
   if (syncTimer) clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => syncAuthToSheet().catch((e) => console.error('[Session Sync]', e.message)), 5000);
+  syncTimer = setTimeout(() => syncAuthToSheet().catch((e) => console.error('[Session Sync]', e.message)), 1500);
 }
 
 async function syncAuthToSheet() {
@@ -186,6 +186,7 @@ module.exports = {
   processRetryQueue,
   restoreAuthFromDrive,
   scheduleAuthSyncToDrive,
+  syncAuthToSheet,
   clearAuthInSheet,
   getRetryCount: () => retryQueue.length,
 };

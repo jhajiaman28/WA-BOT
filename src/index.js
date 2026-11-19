@@ -25,6 +25,7 @@ app.get('/qr', (_req, res) => {
 });
 
 async function recoverMissedDispatches() {
+  if (!getStatus().isConnected) return;
   const now = getISTNow();
   const today = formatISTDate(now);
   const mins = now.getHours() * 60 + now.getMinutes();
@@ -249,3 +250,11 @@ main().catch((err) => {
   console.log('[Fatal]', err.stack || err.message);
   setTimeout(() => process.exit(1), 1000);
 });
+
+async function gracefulShutdown(sig) {
+  console.log(`[Shutdown] ${sig} received, flushing WA_Session...`);
+  try { await google.syncAuthToSheet(); } catch (e) { console.error('[Shutdown Sync]', e.message); }
+  process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
