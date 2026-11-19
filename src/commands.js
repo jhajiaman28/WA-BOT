@@ -434,7 +434,11 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     const [timePart, targetPart, ...payloadParts] = segs;
     const payload = payloadParts.join(' | ');
     const isDaily = /daily$/i.test(timePart);
-    const runAtIST = timePart.replace(/\s*daily$/i, '').trim();
+    let runAtIST = timePart.replace(/\s*daily$/i, '').trim();
+    if (!isDaily && /^\d{1,2}:\d{2}$/.test(runAtIST)) {
+      const [hh, mm] = runAtIST.split(':');
+      runAtIST = `${formatISTDate()} ${hh.padStart(2, '0')}:${mm}`;
+    }
     const repeat = isDaily ? 'DAILY' : 'ONCE';
     let targetJid = chatJid;
     if (targetPart.toLowerCase() !== 'here') {

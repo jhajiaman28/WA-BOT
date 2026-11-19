@@ -2,7 +2,7 @@ const express = require('express');
 const cron = require('node-cron');
 const { PORT, TZ, MASTER_SHEET_ID, getISTNow, formatISTDate } = require('./config');
 const google = require('./google');
-const { state, loadMasterState, isPaused } = require('./state');
+const { state, loadMasterState, saveSetting, isPaused } = require('./state');
 const { startWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus, sendGroupText, sendDM, editControlMsg } = require('./whatsapp');
 const gita = require('./categories/gitaAttendance');
 const dailyPosts = require('./categories/dailyPosts');
@@ -23,6 +23,80 @@ app.get('/qr', (_req, res) => {
   if (!latestQRDataUrl) return res.send('<h2>Waiting for QR code... refresh in 5 seconds.</h2>');
   res.send(`<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;font-family:sans-serif"><h3>Scan WhatsApp QR</h3><img src="${latestQRDataUrl}"/></body></html>`);
 });
+
+async function recoverMissedDispatches() {
+  const now = getISTNow();
+  const today = formatISTDate(now);
+  const mins = now.getHours() * 60 + now.getMinutes();
+
+  // 12:00 AM Study Tracker
+  if (mins >= 5 && !isPaused('study_tracker') && state.settings.LAST_SENT_study_tracker !== today) {
+    await saveSetting('LAST_SENT_study_tracker', formatISTDate());
+    const bindings = state.bindings.filter((b) => (b.bindKey === 'study_tracker' || b.category === 'study_tracker') && b.groupJid);
+    if (bindings.length) {
+      await saveSetting('LAST_SENT_study_tracker', today);
+      for (const b of bindings) {
+        enqueuePoll(async () => {
+          const sent = await sendGroupText(b.groupJid, dailyPosts.buildStudyTrackerText());
+          if (sent?.key?.id) await sendControlMsg(`🔄 Recovered missed Study Tracker for *${b.groupName || b.groupJid}*.`);
+        });
+      }
+    }
+  }
+
+  // 10:00 AM Daily Report
+  if (mins >= 605 && !isPaused('gita_attendance') && state.settings.LAST_SENT_daily_report !== today) {
+    const b = state.bindings.find((x) => x.bindKey === 'gita_attendance');
+    if (b?.groupJid) {
+      await saveSetting('LAST_SENT_daily_report', today);
+      const res = await gita.buildDailyReport(b);
+      if (res.text) {
+        await sendGroupText(b.groupJid, res.text);
+        await sendControlMsg('🔄 Recovered missed 10:00 AM daily report.');
+      }
+    }
+  }
+
+  // Monday 2:00 PM Weekly Report
+  if (now.getDay() === 1 && mins >= 845 && !isPaused('gita_attendance') && state.settings.LAST_SENT_weekly_report !== today) {
+    const b = state.bindings.find((x) => x.bindKey === 'gita_attendance');
+    if (b?.groupJid) {
+      await saveSetting('LAST_SENT_weekly_report', today);
+      const res = await gita.buildWeeklyReport(b);
+      if (res.text) {
+        await sendGroupText(b.groupJid, res.text);
+        await sendControlMsg('🔄 Recovered missed Monday weekly report.');
+      }
+    }
+  }
+
+  // 6:00 PM Vidya-Avidya Poll
+  if (mins >= 1085 && !isPaused('vidya_avidya') && state.settings.LAST_SENT_vidya_avidya !== today) {
+    await saveSetting('LAST_SENT_vidya_avidya', formatISTDate());
+      const vidyaBindings = state.bindings.filter((b) => (b.bindKey === 'vidya_avidya' || b.category === 'vidya_avidya') && b.groupJid);
+    if (vidyaBindings.length) {
+      await saveSetting('LAST_SENT_vidya_avidya', today);
+      const payload = dailyPosts.buildVidyaPollPayload();
+      for (const b of vidyaBindings) {
+        enqueuePoll(async () => {
+          const sent = await sendPoll(b.groupJid, payload);
+          if (sent?.key?.id) await sendControlMsg(`🔄 Recovered missed Vidya-Avidya poll for *${b.groupName || b.groupJid}*.`);
+        });
+      }
+    }
+  }
+
+  // 10:00 PM Gita Attendance Poll
+  if (mins >= 1325 && !isPaused('gita_attendance') && !state.dailySentFlags.has(`gita_attendance:${today}`)) {
+    const b = state.bindings.find((x) => x.bindKey === 'gita_attendance');
+    if (b?.groupJid) {
+      const sessionOverride = state.settings[`SESSION_OVERRIDE_${today}`];
+      const fourth = await generateTauntOption(sessionOverride || 'Today');
+      enqueuePoll(() => gita.dispatchGitaPoll({ sendPoll, sendControlMsg, binding: b, targetDate: today, sessionOverride, fourthOptionOverride: fourth }));
+      await sendControlMsg('🔄 Recovering missed 10:00 PM Gita attendance poll.');
+    }
+  }
+}
 
 function setupCrons() {
   // 6:00 AM IST Daily Health Report
@@ -64,6 +138,7 @@ function setupCrons() {
     if (isPaused('gita_attendance')) return;
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
     if (!binding?.groupJid) return;
+    await saveSetting('LAST_SENT_daily_report', formatISTDate());
     const res = await gita.buildDailyReport(binding);
     if (res.text) await sendGroupText(binding.groupJid, res.text);
   }, { timezone: TZ });
@@ -73,6 +148,7 @@ function setupCrons() {
     if (isPaused('gita_attendance')) return;
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
     if (!binding?.groupJid) return;
+    await saveSetting('LAST_SENT_weekly_report', formatISTDate());
     const res = await gita.buildWeeklyReport(binding);
     if (res.text) await sendGroupText(binding.groupJid, res.text);
   }, { timezone: TZ });
@@ -165,6 +241,7 @@ async function main() {
     console.log('[Startup State Error]', err.stack || err.message);
   }
   setupCrons();
+  setTimeout(() => recoverMissedDispatches().catch(console.error), 15000);
   await startWhatsApp();
 }
 

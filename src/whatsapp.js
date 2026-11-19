@@ -20,9 +20,6 @@ const gita = require('./categories/gitaAttendance');
 let sock = null;
 let latestQRDataUrl = null;
 let isConnected = false;
-let hasNotifiedStartup = false;
-let heartbeatTimer = null;
-let isReconnecting = false;
 const messageStore = new Map();
 const dispatchQueue = [];
 let dispatching = false;
@@ -143,19 +140,6 @@ function tryDecryptVote(pu, msg, poll) {
   throw new Error('Could not decrypt vote with any JID combination');
 }
 
-function scheduleReconnect(reason = 'close') {
-  if (isReconnecting) return;
-  isReconnecting = true;
-  isConnected = false;
-  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-  try { sock?.ev?.removeAllListeners(); } catch {}
-  try { sock?.end(new Error(reason)); } catch {}
-  setTimeout(() => {
-    isReconnecting = false;
-    startWhatsApp().catch(console.error);
-  }, 5000);
-}
-
 async function startWhatsApp() {
   await google.restoreAuthFromDrive();
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -175,36 +159,19 @@ async function startWhatsApp() {
     google.scheduleAuthSyncToDrive();
   });
 
-  if (heartbeatTimer) clearInterval(heartbeatTimer);
-  heartbeatTimer = setInterval(async () => {
-    if (!sock || !isConnected) return;
-    try {
-      await Promise.race([
-        sock.query({ tag: 'iq', attrs: { to: '@s.whatsapp.net', type: 'get', xmlns: 'w:p' } }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('WA ping timeout')), 10000)),
-      ]);
-    } catch (err) {
-      console.error('[Heartbeat] Zombie socket detected, reconnecting:', err.message);
-      scheduleReconnect('heartbeat');
-    }
-  }, 600000);
-
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) latestQRDataUrl = await QRCode.toDataURL(qr);
     if (connection === 'open') {
       isConnected = true;
       latestQRDataUrl = null;
       console.log('[WhatsApp] Connected.');
-      if (!hasNotifiedStartup) {
-        hasNotifiedStartup = true;
-        await sendControlMsg('🔄 Bot is online and monitoring.');
-      }
+      await sendControlMsg('🔄 Bot is online and monitoring.');
     }
     if (connection === 'close') {
       isConnected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code !== DisconnectReason.loggedOut) {
-        scheduleReconnect('close_' + (code || 'unknown'));
+        setTimeout(() => startWhatsApp().catch(console.error), 5000);
       } else {
         console.error('[WhatsApp] Logged out. Clearing stale session & generating fresh QR...');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });

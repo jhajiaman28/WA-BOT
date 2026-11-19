@@ -19,7 +19,7 @@ const state = {
 };
 
 async function loadMasterState() {
-  const [settingsRows, bindingRows, permRows, memberRows, pollRows, schedRows, tplRows] = await Promise.all([
+  const [settingsRows, bindingRows, permRows, memberRows, pollRows, schedRows, tplRows, voteLogRows] = await Promise.all([
     google.getRows(MASTER_SHEET_ID, 'Settings!A2:C'),
     google.getRows(MASTER_SHEET_ID, 'Group_Bindings!A2:H'),
     google.getRows(MASTER_SHEET_ID, 'Admin_Permissions!A2:E'),
@@ -27,6 +27,7 @@ async function loadMasterState() {
     google.getRows(MASTER_SHEET_ID, 'Active_Polls!A2:J'),
     google.getRows(MASTER_SHEET_ID, 'Custom_Schedules!A2:F').catch(() => []),
     google.getRows(MASTER_SHEET_ID, 'Templates!A2:E').catch(() => []),
+    google.getRows(MASTER_SHEET_ID, 'Gita_Vote_Logs!A2:F').catch(() => []),
   ]);
 
   state.settings = {};
@@ -102,6 +103,20 @@ async function loadMasterState() {
     const b = state.bindings.find((x) => x.groupJid === poll.groupJid);
     if (b && poll.targetDate) state.dailySentFlags.add(`${b.bindKey}:${poll.targetDate}`);
   }
+  state.voteCache.clear();
+  for (const r of voteLogRows) {
+    const pollDate = (r[2] || '').trim();
+    const memberName = (r[3] || '').trim();
+    const sym = (r[5] || '').trim();
+    if (!pollDate || !memberName || !sym) continue;
+    const poll = [...state.activePolls.values()].find((p) => p.targetDate === pollDate);
+    const mem = state.members.find((m) => m.officialName.toLowerCase() === memberName.toLowerCase());
+    if (poll && mem) {
+      const vJid = mem.phoneJid || mem.lid;
+      state.voteCache.set(`${poll.pollMsgId}:${vJid}`, { poll, voterJid: vJid, pushName: memberName, symbol: sym, groupKey: mem.groupKey });
+    }
+  }
+
   state.lastSyncAt = formatISTTimestamp();
   console.log(`[State] Loaded: ${state.bindings.length} bindings, ${state.members.length} members, ${state.activePolls.size} active polls.`);
 }
