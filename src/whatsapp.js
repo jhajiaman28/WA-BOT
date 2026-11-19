@@ -215,15 +215,22 @@ async function startWhatsApp() {
 
         if (state.sentMsgIds.has(msg.key.id)) continue;
 
-        const text = msg.message.conversation
-          || msg.message.extendedTextMessage?.text
-          || msg.message.editedMessage?.message?.protocolMessage?.editedMessage?.conversation
+        const inner = msg.message.ephemeralMessage?.message
+          || msg.message.deviceSentMessage?.message
+          || msg.message.viewOnceMessage?.message
+          || msg.message;
+        const text = inner.conversation
+          || inner.extendedTextMessage?.text
+          || inner.editedMessage?.message?.protocolMessage?.editedMessage?.conversation
           || '';
+        const chatJid = msg.key.remoteJid;
+        if (chatJid === state.settings.CONTROL_GROUP_JID) {
+          console.log('[Control Rx]', { fromMe: msg.key.fromMe, keys: Object.keys(msg.message), text: text.slice(0, 40) });
+        }
         if (!text) continue;
 
-        const chatJid = msg.key.remoteJid;
         const senderJid = jidNormalizedUser(msg.key.fromMe ? sock.user?.id : (msg.key.participant || chatJid));
-        const quotedId = msg.message.extendedTextMessage?.contextInfo?.stanzaId || null;
+        const quotedId = inner.extendedTextMessage?.contextInfo?.stanzaId || msg.message.extendedTextMessage?.contextInfo?.stanzaId || null;
 
         await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg });
       } catch (err) {
