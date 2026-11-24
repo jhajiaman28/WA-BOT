@@ -15,6 +15,9 @@ const state = {
   chatHistory: new Map(),
   sentMsgIds: new Set(),
   dailySentFlags: new Set(),
+  contacts: new Map(),
+  dmJobActive: false,
+  dmJobCancel: false,
   lastSyncAt: null,
 };
 
@@ -204,6 +207,7 @@ function pushChatHistory(chatJid, role, text) {
 
 
 function isPaused(categoryKey) {
+  if (state.settings.EMERGENCY_STOP === 'TRUE') return true;
   if (state.settings.SCHEDULE_PAUSED === 'TRUE') return true;
   if (categoryKey && state.settings[`PAUSED_${categoryKey}`] === 'TRUE') return true;
   return false;

@@ -189,6 +189,13 @@ async function startWhatsApp() {
     }
   });
 
+  sock.ev.on('contacts.upsert', (contacts) => {
+    for (const c of contacts || []) {
+      const name = c.notify || c.name || c.verifiedName;
+      if (c.id && name) state.contacts.set(jidNormalizedUser(c.id), name);
+    }
+  });
+
   sock.ev.on('messages.upsert', async ({ messages }) => {
     for (const msg of messages) {
       try {
@@ -198,6 +205,7 @@ async function startWhatsApp() {
         }
 
         if (msg.message.pollUpdateMessage) {
+          if (state.settings.EMERGENCY_STOP === 'TRUE') continue;
           const pu = msg.message.pollUpdateMessage;
           const pollId = pu.pollCreationMessageKey?.id;
           const poll = state.activePolls.get(pollId);
@@ -244,6 +252,7 @@ async function startWhatsApp() {
     for (const { key, update } of updates) {
       try {
         if (update.pollUpdates) {
+          if (state.settings.EMERGENCY_STOP === 'TRUE') continue;
           const poll = state.activePolls.get(key.id);
           if (!poll) continue;
           const pollMsg = messageStore.get(key.id);

@@ -3,6 +3,7 @@ const google = require('./google');
 const { state, loadMasterState, saveSetting, registerMember, isFullAuthority, isAuthorized } = require('./state');
 const gita = require('./categories/gitaAttendance');
 const reminders = require('./reminders');
+const groupBroadcast = require('./groupBroadcast');
 const dailyPosts = require('./categories/dailyPosts');
 const { generateTauntOption, handleAIConversation } = require('./ai');
 
@@ -14,7 +15,8 @@ const HELP_TEXT = `*BOT COMMANDS*
 • \`#study / #vidya [test] [DD/MM/YY]\` — Study Tracker / Vidya poll
 • \`#sync_votes\` — Re-check & fix sheet votes
 
-*Reminders & Saved Messages*
+*DMs, Reminders & Saved Messages*
+• \`#dm_group <keyword>\` — Fetch group members & DM with exclusions
 • \`#reminders\` — Run inactive-member reminder check now
 • \`#dnd add|remove <Name>\` — Toggle No-DM flag
 • \`#save_msg <name>\` + text — Save message (keeps old versions)
@@ -29,9 +31,10 @@ const HELP_TEXT = `*BOT COMMANDS*
 • \`#find [keyword|all]\` / \`#bind <#> <bindKey>\` — Link groups
 • \`#register\` — Bulk add members (phone + name/line)
 • \`#admin add <phone> [FULL|LIMITED] [cats]\` / \`remove <phone>\`
-• \`#status\` / \`#sync\` — Health & reload Master Sheet
+• \`#status\` / \`#sync\` / \`#help\` — Health, reload & help
 • \`#listen [15m|5|forever]\` / \`#stop\` — Chat listener
-• \`#set_control_group\` / \`#help\` — Setup & help`;
+• \`#cancel\` — Cancel active DM/job or pending prompt
+• \`#kill\` / \`#wake\` — Full Emergency Stop / Resume bot`;
 
 let lastGroupSearch = [];
 
@@ -170,6 +173,21 @@ async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePo
     return true;
   }
 
+  if (prompt.type === 'DM_PICK_GROUP') {
+    state.pendingPrompts.delete(quotedId);
+    if (/^cancel$/i.test(txt)) { await sendControlMsg('⏹️ Cancelled.'); return true; }
+    const g = prompt.groups[parseInt(txt, 10) - 1];
+    if (!g) { await sendControlMsg('⚠️ Invalid selection.'); return true; }
+    await groupBroadcast.showGroupMembersForDM({ sock: prompt.sock, group: g, sendControlMsg });
+    return true;
+  }
+
+  if (prompt.type === 'DM_GROUP_SEND') {
+    state.pendingPrompts.delete(quotedId);
+    await groupBroadcast.executeGroupDM({ prompt, replyText, sendControlMsg, sendDM, editControlMsg });
+    return true;
+  }
+
   if (prompt.type === 'CONFIRM_REMINDERS') {
     state.pendingPrompts.delete(quotedId);
     await reminders.processReminderReply({ prompt, replyText: txt, sendControlMsg, sendDM, editControlMsg });
@@ -237,11 +255,39 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
   if (cmd === '#help') return sendControlMsg(HELP_TEXT);
 
   if (cmd === '#status') {
+    const emergency = state.settings.EMERGENCY_STOP === 'TRUE';
     const paused = state.settings.SCHEDULE_PAUSED === 'TRUE' ? 'PAUSED' : 'ACTIVE';
     return sendControlMsg(
-      `🟢 *Bot Status*\n• Schedule: ${paused}\n• Active Polls (30d): ${state.activePolls.size}\n• Registered Members: ${state.members.length}\n• Retry Queue: ${google.getRetryCount()}\n• Active Listeners: ${state.listeners.size}\n• Last Sync: ${state.lastSyncAt}`
+      `${emergency ? '🛑 *EMERGENCY STOP ACTIVE* (Send `#wake` to resume)' : '🟢 *Bot Status*'}\n• Schedule: ${paused}\n• Active Polls (30d): ${state.activePolls.size}\n• Registered Members: ${state.members.length}\n• Retry Queue: ${google.getRetryCount()}\n• Active Listeners: ${state.listeners.size}\n• Last Sync: ${state.lastSyncAt}`
     );
   }
+
+  if (cmd === '#kill' && fullAuth) {
+    state.dmJobCancel = true;
+    state.pendingPrompts.clear();
+    for (const [, l] of state.listeners.entries()) { if (l.timer) clearTimeout(l.timer); }
+    state.listeners.clear();
+    await saveSetting('EMERGENCY_STOP', 'TRUE', 'Full bot shutdown');
+    return sendControlMsg('🛑 *EMERGENCY STOP ACTIVATED.* All jobs, polls, listeners & schedules halted. Only `#status`, `#help`, and `#wake` will respond.');
+  }
+
+  if (cmd === '#wake' && fullAuth) {
+    await saveSetting('EMERGENCY_STOP', 'FALSE', 'Full bot shutdown');
+    return sendControlMsg('🟢 *Bot Resumed.* All commands and schedules are active again.');
+  }
+
+  if (state.settings.EMERGENCY_STOP === 'TRUE') {
+    return sendControlMsg('🛑 Bot is in *EMERGENCY STOP* mode. Send `#wake` to resume (only `#status` and `#help` work right now).');
+  }
+
+  if (cmd === '#cancel' && fullAuth) {
+    if (state.dmJobActive) state.dmJobCancel = true;
+    const cleared = state.pendingPrompts.size;
+    state.pendingPrompts.clear();
+    return sendControlMsg(`⏹️ Cancelled active job/prompts (cleared ${cleared} pending prompt(s)).`);
+  }
+
+
 
   if (cmd === '#sync') {
     await loadMasterState();
@@ -538,6 +584,11 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
     if (!binding) return sendControlMsg('⚠️ `gita_attendance` binding missing.');
     await reminders.runDailyReminderCheck({ sendControlMsg, binding });
+    return;
+  }
+
+  if (cmd === '#dm_group' && fullAuth) {
+    await groupBroadcast.startGroupDMFlow({ sock, chatJid, query: args.join(' '), sendControlMsg });
     return;
   }
 
