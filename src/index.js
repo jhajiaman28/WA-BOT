@@ -3,7 +3,7 @@ const cron = require('node-cron');
 const { PORT, TZ, MASTER_SHEET_ID, getISTNow, formatISTDate } = require('./config');
 const google = require('./google');
 const { state, loadMasterState, saveSetting, isPaused } = require('./state');
-const { startWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus, sendGroupText, sendDM, editControlMsg } = require('./whatsapp');
+const { startWhatsApp, stopWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus, sendGroupText, sendDM, editControlMsg } = require('./whatsapp');
 const gita = require('./categories/gitaAttendance');
 const dailyPosts = require('./categories/dailyPosts');
 const reminders = require('./reminders');
@@ -29,21 +29,6 @@ async function recoverMissedDispatches() {
   const now = getISTNow();
   const today = formatISTDate(now);
   const mins = now.getHours() * 60 + now.getMinutes();
-
-  // 12:00 AM Study Tracker
-  if (mins >= 5 && !isPaused('study_tracker') && state.settings.LAST_SENT_study_tracker !== today) {
-    await saveSetting('LAST_SENT_study_tracker', formatISTDate());
-    const bindings = state.bindings.filter((b) => (b.bindKey === 'study_tracker' || b.category === 'study_tracker') && b.groupJid);
-    if (bindings.length) {
-      await saveSetting('LAST_SENT_study_tracker', today);
-      for (const b of bindings) {
-        enqueuePoll(async () => {
-          const sent = await sendGroupText(b.groupJid, dailyPosts.buildStudyTrackerText());
-          if (sent?.key?.id) await sendControlMsg(`🔄 Recovered missed Study Tracker for *${b.groupName || b.groupJid}*.`);
-        });
-      }
-    }
-  }
 
   // 10:00 AM Daily Report
   if (mins >= 605 && !isPaused('gita_attendance') && state.settings.LAST_SENT_daily_report !== today) {
@@ -254,7 +239,8 @@ main().catch((err) => {
 });
 
 async function gracefulShutdown(sig) {
-  console.log(`[Shutdown] ${sig} received, flushing WA_Session...`);
+  console.log(`[Shutdown] ${sig} received, closing socket & flushing WA_Session...`);
+  try { stopWhatsApp(); } catch {}
   try { await google.syncAuthToSheet(); } catch (e) { console.error('[Shutdown Sync]', e.message); }
   process.exit(0);
 }

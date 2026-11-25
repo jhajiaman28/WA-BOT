@@ -1,3 +1,4 @@
+const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
@@ -125,7 +126,10 @@ async function restoreAuthFromDrive() {
     let count = 0;
     for (const [name, data] of rows) {
       if (name && data) {
-        fs.writeFileSync(path.join(AUTH_DIR, name), data);
+        const plain = data.startsWith('GZ:')
+          ? zlib.gunzipSync(Buffer.from(data.slice(3), 'base64')).toString('utf8')
+          : data;
+        fs.writeFileSync(path.join(AUTH_DIR, name), plain);
         count++;
       }
     }
@@ -158,7 +162,10 @@ async function syncAuthToSheet() {
   const rows = [['File_Name', 'Data']];
   for (const name of files) {
     const content = fs.readFileSync(path.join(AUTH_DIR, name), 'utf8');
-    if (content.length <= 49000) rows.push([name, content]);
+    const encoded = content.length > 40000
+      ? 'GZ:' + zlib.gzipSync(Buffer.from(content, 'utf8')).toString('base64')
+      : content;
+    if (encoded.length <= 49000) rows.push([name, encoded]);
   }
   await sheets.spreadsheets.values.clear({ spreadsheetId: MASTER_SHEET_ID, range: 'WA_Session!A1:B' });
   await updateRange(MASTER_SHEET_ID, 'WA_Session!A1', rows, 'RAW');

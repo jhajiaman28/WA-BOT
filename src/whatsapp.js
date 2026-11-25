@@ -177,7 +177,14 @@ async function startWhatsApp() {
       isConnected = true;
       latestQRDataUrl = null;
       console.log('[WhatsApp] Connected.');
-      await sendControlMsg('🔄 Bot is online and monitoring.');
+      setTimeout(async () => {
+        try {
+          if (sock?.user?.id && sock.assertSessions) {
+            await sock.assertSessions([jidNormalizedUser(sock.user.id)], false);
+          }
+        } catch {}
+        await sendControlMsg('🔄 Bot is online and monitoring.').catch(() => {});
+      }, 3000);
       setTimeout(() => memberTracker.syncOfflineChanges(sock).catch(console.error), 8000);
     }
     if (connection === 'close') {
@@ -349,8 +356,15 @@ async function startWhatsApp() {
 }
 
 
+function stopWhatsApp() {
+  isConnected = false;
+  try { sock?.ev?.removeAllListeners(); } catch {}
+  try { sock?.end(new Error('shutdown')); } catch {}
+}
+
 module.exports = {
   startWhatsApp,
+  stopWhatsApp,
   sendGroupText,
   sendControlMsg,
   editControlMsg,
