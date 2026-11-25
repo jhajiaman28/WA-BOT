@@ -120,7 +120,7 @@ async function runDailyReminderCheck({ sendControlMsg, binding }) {
 
   const previewNote = sampleRepeat ? `\n\n_Repeat preview:_ "${sampleRepeat.split('\n')[0]}..."` : '';
   const msg = await sendControlMsg(
-    `🔔 *6:00 PM Inactive Reminder Check (${today})*\n${lines.join('\n')}${previewNote}\n\nQuote-reply: *Yes*, *Skip 2*, *Only 1,3*, *Include 4*, *DND 4*, *5 = 98XXXXXXXX*, *3 | strict*, or *No*`
+    `🔔 *9:30 AM Inactive Reminder Check (${today})*\n${lines.join('\n')}${previewNote}\n\nQuote-reply: *Yes*, *Skip 2*, *Only 1,3*, *Include 4*, *DND 4*, *5 = 98XXXXXXXX*, *3 | strict*, or *No*`
   );
 
   if (msg?.key?.id) {
