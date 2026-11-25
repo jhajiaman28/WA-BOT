@@ -10,6 +10,7 @@ const state = {
   voteCache: new Map(),
   customSchedules: [],
   templates: [],
+  trackedGroups: [],
   pendingPrompts: new Map(),
   listeners: new Map(),
   chatHistory: new Map(),
@@ -22,7 +23,7 @@ const state = {
 };
 
 async function loadMasterState() {
-  const [settingsRows, bindingRows, permRows, memberRows, pollRows, schedRows, tplRows, voteLogRows] = await Promise.all([
+  const [settingsRows, bindingRows, permRows, memberRows, pollRows, schedRows, tplRows, voteLogRows, trackedRows] = await Promise.all([
     google.getRows(MASTER_SHEET_ID, 'Settings!A2:C'),
     google.getRows(MASTER_SHEET_ID, 'Group_Bindings!A2:H'),
     google.getRows(MASTER_SHEET_ID, 'Admin_Permissions!A2:E'),
@@ -31,6 +32,7 @@ async function loadMasterState() {
     google.getRows(MASTER_SHEET_ID, 'Custom_Schedules!A2:F').catch(() => []),
     google.getRows(MASTER_SHEET_ID, 'Templates!A2:E').catch(() => []),
     google.getRows(MASTER_SHEET_ID, 'Gita_Vote_Logs!A2:F').catch(() => []),
+    google.getRows(MASTER_SHEET_ID, 'Tracked_Groups!A2:G').catch(() => []),
   ]);
 
   state.settings = {};
@@ -99,6 +101,7 @@ async function loadMasterState() {
     runAtIST: (r[3] || '').trim(),
     repeat: (r[4] || 'ONCE').trim().toUpperCase(),
     status: (r[5] || 'ACTIVE').trim().toUpperCase(),
+    notifyControl: String(r[6] || '').toUpperCase() === 'TRUE',
   }));
 
   state.dailySentFlags.clear();
@@ -106,6 +109,15 @@ async function loadMasterState() {
     const b = state.bindings.find((x) => x.groupJid === poll.groupJid);
     if (b && poll.targetDate) state.dailySentFlags.add(`${b.bindKey}:${poll.targetDate}`);
   }
+  state.trackedGroups = trackedRows.filter((r) => r[1]).map((r) => ({
+    groupName: (r[0] || '').trim(),
+    groupJid: (r[1] || '').trim(),
+    sheetId: (r[2] || '').trim(),
+    sheetUrl: (r[3] || '').trim(),
+    createdAt: (r[4] || '').trim(),
+    status: (r[5] || 'ACTIVE').trim().toUpperCase(),
+  }));
+
   state.voteCache.clear();
   for (const r of voteLogRows) {
     const pollDate = (r[2] || '').trim();

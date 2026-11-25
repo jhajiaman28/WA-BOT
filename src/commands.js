@@ -4,6 +4,7 @@ const { state, loadMasterState, saveSetting, registerMember, isFullAuthority, is
 const gita = require('./categories/gitaAttendance');
 const reminders = require('./reminders');
 const groupBroadcast = require('./groupBroadcast');
+const memberTracker = require('./memberTracker');
 const dailyPosts = require('./categories/dailyPosts');
 const { generateTauntOption, handleAIConversation } = require('./ai');
 
@@ -17,6 +18,8 @@ const HELP_TEXT = `*BOT COMMANDS*
 
 *DMs, Reminders & Saved Messages*
 • \`#dm_group <keyword>\` — Fetch group members & DM with exclusions
+• \`#track_members <group> [sheetURL]\` / \`#untrack_members <group>\`
+• \`#track_notify <group> <on|off>\` — Toggle entry/exit alerts
 • \`#reminders\` — Run inactive-member reminder check now
 • \`#dnd add|remove <Name>\` — Toggle No-DM flag
 • \`#save_msg <name>\` + text — Save message (keeps old versions)
@@ -84,7 +87,7 @@ async function stopListener(chatJid, reason, sendControlMsg) {
   await sendControlMsg(`⏹️ Listening stopped (${reason}). Cleared ${stopped} active listener(s).`);
 }
 
-async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePoll, sendDM, editControlMsg }) {
+async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePoll, sendDM, editControlMsg, deleteControlMsg }) {
   const prompt = state.pendingPrompts.get(quotedId);
   if (!prompt) return false;
   const txt = replyText.trim();
@@ -173,6 +176,26 @@ async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePo
     return true;
   }
 
+  if (prompt.type === 'TRACK_PICK_GROUP') {
+    state.pendingPrompts.delete(quotedId);
+    if (/^cancel$/i.test(txt)) { await sendControlMsg('⏹️ Cancelled.'); return true; }
+    const g = prompt.groups[parseInt(txt, 10) - 1];
+    if (!g) { await sendControlMsg('⚠️ Invalid selection.'); return true; }
+    await memberTracker.setupGroupTrackerSheet({ sock: prompt.sock, group: g, customSheetUrl: prompt.customSheetUrl, sendControlMsg, editControlMsg, deleteControlMsg });
+    return true;
+  }
+
+  if (prompt.type === 'TRACK_CONFIRM_GROUP') {
+    state.pendingPrompts.delete(quotedId);
+    if (/^cancel$/i.test(txt)) { await sendControlMsg('⏹️ Cancelled.'); return true; }
+    if (/^yes$/i.test(txt)) {
+      await memberTracker.setupGroupTrackerSheet({ sock: prompt.sock, group: prompt.group, customSheetUrl: prompt.customSheetUrl, sendControlMsg, editControlMsg, deleteControlMsg });
+      return true;
+    }
+    await memberTracker.resolveAndConfirmOther({ sock: prompt.sock, replyText: txt, customSheetUrl: prompt.customSheetUrl, sendControlMsg });
+    return true;
+  }
+
   if (prompt.type === 'DM_PICK_GROUP') {
     state.pendingPrompts.delete(quotedId);
     if (/^cancel$/i.test(txt)) { await sendControlMsg('⏹️ Cancelled.'); return true; }
@@ -213,13 +236,13 @@ async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePo
   return false;
 }
 
-async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg }) {
+async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg }) {
   const controlJid = state.settings.CONTROL_GROUP_JID;
   const isControlGroup = controlJid && chatJid === controlJid;
   const isCommand = text.trim().startsWith('#');
 
   if (isControlGroup && quotedId && isAuthorized(senderJid, 'CONTROL')) {
-    const handled = await handleQuoteReply({ quotedId, replyText: text, sendControlMsg, enqueuePoll, sendDM, editControlMsg });
+    const handled = await handleQuoteReply({ quotedId, replyText: text, sendControlMsg, enqueuePoll, sendDM, editControlMsg, deleteControlMsg });
     if (handled) return;
   }
 
@@ -584,6 +607,29 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
     if (!binding) return sendControlMsg('⚠️ `gita_attendance` binding missing.');
     await reminders.runDailyReminderCheck({ sendControlMsg, binding });
+    return;
+  }
+
+  if (cmd === '#track_members' && fullAuth) {
+    const urlIdx = args.findIndex((a) => a.includes('docs.google.com/spreadsheets'));
+    const customSheetUrl = urlIdx >= 0 ? args[urlIdx] : '';
+    const query = (urlIdx >= 0 ? args.slice(0, urlIdx) : args).join(' ');
+    await memberTracker.startTrackingGroup({ sock, query, customSheetUrl, sendControlMsg });
+    return;
+  }
+
+  if (cmd === '#untrack_members' && fullAuth) {
+    await memberTracker.untrackGroup({ query: args.join(' '), sendControlMsg });
+    return;
+  }
+
+  if (cmd === '#track_notify' && fullAuth) {
+    const toggle = (args[args.length - 1] || '').toLowerCase();
+    if (!['on', 'off'].includes(toggle) || args.length < 2) {
+      return sendControlMsg('Usage: `#track_notify <group_keyword> <on|off>`');
+    }
+    const query = args.slice(0, -1).join(' ');
+    await memberTracker.toggleNotify({ query, enabled: toggle === 'on', sendControlMsg });
     return;
   }
 

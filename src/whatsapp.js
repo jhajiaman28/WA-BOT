@@ -16,6 +16,7 @@ const google = require('./google');
 const { state } = require('./state');
 const { processIncomingMessage } = require('./commands');
 const gita = require('./categories/gitaAttendance');
+const memberTracker = require('./memberTracker');
 
 let sock = null;
 let latestQRDataUrl = null;
@@ -47,6 +48,17 @@ async function sendGroupText(groupJid, text) {
   const sent = await sock.sendMessage(groupJid, { text });
   if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
   return sent;
+}
+
+async function deleteControlMsg(msgKey) {
+  const jid = state.settings.CONTROL_GROUP_JID;
+  if (!sock || !jid || !isConnected || !msgKey) return false;
+  try {
+    await sock.sendMessage(jid, { delete: msgKey });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function editControlMsg(msgKey, newText) {
@@ -166,6 +178,7 @@ async function startWhatsApp() {
       latestQRDataUrl = null;
       console.log('[WhatsApp] Connected.');
       await sendControlMsg('🔄 Bot is online and monitoring.');
+      setTimeout(() => memberTracker.syncOfflineChanges(sock).catch(console.error), 8000);
     }
     if (connection === 'close') {
       isConnected = false;
@@ -240,7 +253,7 @@ async function startWhatsApp() {
         const senderJid = jidNormalizedUser(msg.key.fromMe ? sock.user?.id : (msg.key.participant || chatJid));
         const quotedId = inner.extendedTextMessage?.contextInfo?.stanzaId || msg.message.extendedTextMessage?.contextInfo?.stanzaId || null;
 
-        await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg });
+        await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg });
       } catch (err) {
         console.error('[WA Message Error]', err);
         await sendControlMsg(`⚠️ Error: ${err.message}`).catch(() => {});
@@ -280,7 +293,7 @@ async function startWhatsApp() {
           || update.message?.editedMessage?.message?.extendedTextMessage?.text;
         if (editedText && !state.sentMsgIds.has(key.id)) {
           const senderJid = jidNormalizedUser(key.fromMe ? sock.user?.id : (key.participant || key.remoteJid));
-          await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg });
+          await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg });
         }
       } catch (err) {
         console.error('[WA Update Error]', err);
@@ -291,6 +304,9 @@ async function startWhatsApp() {
 
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
     try {
+      if (state.settings.EMERGENCY_STOP !== 'TRUE') {
+        await memberTracker.handleParticipantEvent({ groupJid: id, participants, action, sendControlMsg });
+      }
       const binding = state.bindings.find((b) => b.groupJid === id && b.trackJoins);
       if (!binding) return;
 
@@ -338,6 +354,7 @@ module.exports = {
   sendGroupText,
   sendControlMsg,
   editControlMsg,
+  deleteControlMsg,
   sendDM,
   sendPoll,
   enqueuePoll,

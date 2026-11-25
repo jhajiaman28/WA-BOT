@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
-const { GOOGLE_SERVICE_ACCOUNT_JSON, MASTER_SHEET_ID, AUTH_DIR } = require('./config');
+const { GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_REFRESH_TOKEN, MASTER_SHEET_ID, AUTH_DIR } = require('./config');
 
 let sheetsClient = null;
 const retryQueue = [];
@@ -175,6 +175,67 @@ async function clearAuthInSheet() {
   }
 }
 
+
+function getServiceAccountEmail() {
+  if (!GOOGLE_SERVICE_ACCOUNT_JSON) return '';
+  const raw = GOOGLE_SERVICE_ACCOUNT_JSON.trim().startsWith('{')
+    ? GOOGLE_SERVICE_ACCOUNT_JSON
+    : Buffer.from(GOOGLE_SERVICE_ACCOUNT_JSON, 'base64').toString('utf8');
+  return JSON.parse(raw).client_email || '';
+}
+
+async function createTrackerSpreadsheet(title) {
+  if (!GOOGLE_OAUTH_CLIENT_ID || !GOOGLE_OAUTH_CLIENT_SECRET || !GOOGLE_OAUTH_REFRESH_TOKEN) {
+    throw new Error('Missing OAuth env vars (GOOGLE_OAUTH_CLIENT_ID / SECRET / REFRESH_TOKEN) to create new spreadsheets, or pass an existing Sheet URL.');
+  }
+  const oauth2 = new google.auth.OAuth2(GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET);
+  oauth2.setCredentials({ refresh_token: GOOGLE_OAUTH_REFRESH_TOKEN });
+  const userSheets = google.sheets({ version: 'v4', auth: oauth2 });
+  const userDrive = google.drive({ version: 'v3', auth: oauth2 });
+
+  const created = await userSheets.spreadsheets.create({
+    requestBody: {
+      properties: { title },
+      sheets: [
+        { properties: { title: 'Current_Members' } },
+        { properties: { title: 'Exited_Members' } },
+      ],
+    },
+  });
+  const sheetId = created.data.spreadsheetId;
+  const saEmail = getServiceAccountEmail();
+  if (saEmail) {
+    await userDrive.permissions.create({
+      fileId: sheetId,
+      requestBody: { type: 'user', role: 'writer', emailAddress: saEmail },
+      sendNotificationEmail: false,
+    });
+  }
+
+  await updateRange(sheetId, 'Current_Members!A1:E1', [['Name', 'Phone_or_ID', 'Entry_Type', 'Joined_Date', 'Joined_Time']], 'RAW');
+  await updateRange(sheetId, 'Exited_Members!A1:E1', [['Name', 'Phone_or_ID', 'Exit_Date', 'Exit_Time', 'Action']], 'RAW');
+  return sheetId;
+}
+
+async function createTabIfMissing(spreadsheetId, tabName) {
+  const sheets = initSheetsClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties.title' });
+  const exists = meta.data.sheets.some((s) => s.properties.title === tabName);
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
+    });
+  }
+}
+
+async function rewriteTab(spreadsheetId, tabName, headers, rows) {
+  const sheets = initSheetsClient();
+  const allRows = [headers, ...rows];
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: `${tabName}!A:Z` });
+  await updateRange(spreadsheetId, `${tabName}!A1`, allRows, 'RAW');
+}
+
 module.exports = {
   colIndexToLetter,
   getRows,
@@ -188,5 +249,8 @@ module.exports = {
   scheduleAuthSyncToDrive,
   syncAuthToSheet,
   clearAuthInSheet,
+  createTrackerSpreadsheet,
+  createTabIfMissing,
+  rewriteTab,
   getRetryCount: () => retryQueue.length,
 };
