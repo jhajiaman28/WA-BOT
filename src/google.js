@@ -221,6 +221,7 @@ async function createTrackerSpreadsheet(title) {
 
   await updateRange(sheetId, 'Current_Members!A1:E1', [['Name', 'Phone_or_ID', 'Entry_Type', 'Joined_Date', 'Joined_Time']], 'RAW');
   await updateRange(sheetId, 'Exited_Members!A1:E1', [['Name', 'Phone_or_ID', 'Exit_Date', 'Exit_Time', 'Action']], 'RAW');
+  await formatTrackerSheet(sheetId).catch(() => {});
   return sheetId;
 }
 
@@ -243,6 +244,58 @@ async function rewriteTab(spreadsheetId, tabName, headers, rows) {
   await updateRange(spreadsheetId, `${tabName}!A1`, allRows, 'RAW');
 }
 
+
+async function renameSpreadsheetIfUntitled(spreadsheetId, newTitle) {
+  const sheets = initSheetsClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'properties.title' });
+  const cur = (meta.data.properties?.title || '').trim();
+  if (!cur || cur.toLowerCase().startsWith('untitled')) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ updateSpreadsheetProperties: { properties: { title: newTitle }, fields: 'title' } }],
+      },
+    });
+  }
+}
+
+async function formatTrackerSheet(spreadsheetId) {
+  const sheets = initSheetsClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+  const requests = [];
+  for (const s of meta.data.sheets || []) {
+    const { sheetId, title } = s.properties;
+    if (title !== 'Current_Members' && title !== 'Exited_Members') continue;
+    requests.push(
+      {
+        updateSheetProperties: {
+          properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+          fields: 'gridProperties.frozenRowCount',
+        },
+      },
+      {
+        repeatCell: {
+          range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 5 },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.06, green: 0.46, blue: 0.43 },
+              textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+              verticalAlignment: 'MIDDLE',
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat,verticalAlignment)',
+        },
+      },
+      {
+        autoResizeDimensions: {
+          dimensions: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 5 },
+        },
+      }
+    );
+  }
+  if (requests.length) await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+}
+
 module.exports = {
   colIndexToLetter,
   getRows,
@@ -259,5 +312,7 @@ module.exports = {
   createTrackerSpreadsheet,
   createTabIfMissing,
   rewriteTab,
+  renameSpreadsheetIfUntitled,
+  formatTrackerSheet,
   getRetryCount: () => retryQueue.length,
 };

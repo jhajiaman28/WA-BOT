@@ -312,7 +312,7 @@ async function startWhatsApp() {
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
     try {
       if (state.settings.EMERGENCY_STOP !== 'TRUE') {
-        await memberTracker.handleParticipantEvent({ groupJid: id, participants, action, sendControlMsg });
+        await memberTracker.handleParticipantEvent({ groupJid: id, participants, action, sendControlMsg, sock });
       }
       const binding = state.bindings.find((b) => b.groupJid === id && b.trackJoins);
       if (!binding) return;
@@ -372,5 +372,6 @@ module.exports = {
   sendDM,
   sendPoll,
   enqueuePoll,
+  getSock: () => sock,
   getStatus: () => ({ isConnected, latestQRDataUrl }),
 };

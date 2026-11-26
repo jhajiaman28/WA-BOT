@@ -7,6 +7,7 @@ const { startWhatsApp, stopWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getS
 const gita = require('./categories/gitaAttendance');
 const dailyPosts = require('./categories/dailyPosts');
 const reminders = require('./reminders');
+const memberTracker = require('./memberTracker');
 const { processIncomingMessage } = require('./commands');
 const { generateTauntOption } = require('./ai');
 
@@ -216,6 +217,9 @@ function setupCrons() {
       }
     }
   }, { timezone: TZ });
+
+  // Background member tracker name/phone backfill every 30 minutes
+  setInterval(() => memberTracker.syncOfflineChanges(require('./whatsapp').getSock?.()).catch(() => {}), 1800000);
 
   // Retry queue flush every 2 minutes
   setInterval(() => google.processRetryQueue(sendControlMsg).catch(console.error), 120000);
