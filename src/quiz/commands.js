@@ -46,7 +46,7 @@ function formatHelp() {
   ].join('\n');
 }
 
-async function handlePollControlMessage({ remoteJid, senderJid, text, sheets, permissions }) {
+async function handlePollControlMessage({ remoteJid, senderJid, text, sheets, permissions, globalEmergencyStop = false }) {
   const settings = sheets.getSettingsMap();
   const trimmed = (text || '').trim();
   if (!trimmed.startsWith('#')) return { ignored: true, reason: 'Not a command' };
@@ -71,7 +71,7 @@ async function handlePollControlMessage({ remoteJid, senderJid, text, sheets, pe
     return { reply: `⛔ ${perm.reason}` };
   }
 
-  const emergencyOn = String(settings.EMERGENCY_STOP).toUpperCase() === 'TRUE';
+  const emergencyOn = globalEmergencyStop || String(settings.EMERGENCY_STOP).toUpperCase() === 'TRUE';
   if (emergencyOn && !['#status', '#help', '#wake'].includes(cmd)) {
     return { reply: '🛑 *EMERGENCY STOP ACTIVE.* Only `#status`, `#help`, and `#wake` are responsive.' };
   }

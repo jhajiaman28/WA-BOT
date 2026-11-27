@@ -21,7 +21,7 @@ function getPollControlJid() {
   return settings.POLL_CONTROL_JID || '';
 }
 
-async function handleIncoming({ sock, chatJid, senderJid, text }) {
+async function handleIncoming({ sock, chatJid, senderJid, text, globalEmergencyStop = false }) {
   if (!initialized) await initQuizModule();
 
   const trimmed = (text || '').trim();
@@ -57,6 +57,7 @@ async function handleIncoming({ sock, chatJid, senderJid, text }) {
     text,
     sheets,
     permissions,
+    globalEmergencyStop,
   });
 
   if (res.ignored) return false;

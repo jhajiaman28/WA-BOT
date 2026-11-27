@@ -10,6 +10,7 @@ const reminders = require('./reminders');
 const memberTracker = require('./memberTracker');
 const outreachMaster = require('./outreachMaster');
 const { processIncomingMessage } = require('./commands');
+const quiz = require('./quiz');
 const { generateTauntOption } = require('./ai');
 
 const app = express();
@@ -235,6 +236,7 @@ async function main() {
   app.listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
   try {
     await loadMasterState();
+    await quiz.initQuizModule().catch(console.error);
   } catch (err) {
     console.log('[Startup State Error]', err.stack || err.message);
   }
