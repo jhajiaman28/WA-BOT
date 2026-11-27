@@ -5,6 +5,7 @@ const gita = require('./categories/gitaAttendance');
 const reminders = require('./reminders');
 const groupBroadcast = require('./groupBroadcast');
 const memberTracker = require('./memberTracker');
+const quiz = require('./quiz');
 const outreachMaster = require('./outreachMaster');
 const dailyPosts = require('./categories/dailyPosts');
 const { generateTauntOption, handleAIConversation } = require('./ai');
@@ -291,15 +292,29 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     if (handled) return;
   }
 
-  if (text.trim().toLowerCase() === '#set_outreach_control' && isFullAuthority(senderJid)) {
-    await saveSetting('OUTREACH_CONTROL_JID', chatJid, 'Dedicated Outreach Control Group JID');
-    const sent = await sock.sendMessage(chatJid, { text: `✅ Outreach Control Group set to \`${chatJid}\`.` });
+  const trimmedLower = text.trim().toLowerCase();
+  if (trimmedLower.startsWith('#set_outreach_control') && isFullAuthority(senderJid)) {
+    const argJid = text.trim().split(/\s+/)[1]?.replace(/[.,;]+$/, '') || '';
+    const targetJid = argJid ? (argJid.includes('@') ? argJid : `${argJid}@g.us`) : chatJid;
+    await saveSetting('OUTREACH_CONTROL_JID', targetJid, 'Dedicated Outreach Control Group JID');
+    const sent = await sock.sendMessage(chatJid, { text: `✅ Outreach Control Group set to \`${targetJid}\`.` });
     if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
     return;
   }
-  if (text.trim().toLowerCase() === '#set_callers_group' && isFullAuthority(senderJid)) {
-    await saveSetting('CALLERS_GROUP_JID', chatJid, 'Callers Team Group JID');
-    const sent = await sock.sendMessage(chatJid, { text: `✅ Callers Team Group set to \`${chatJid}\`.` });
+  if (trimmedLower.startsWith('#set_callers_group') && isFullAuthority(senderJid)) {
+    const argJid = text.trim().split(/\s+/)[1]?.replace(/[.,;]+$/, '') || '';
+    const targetJid = argJid ? (argJid.includes('@') ? argJid : `${argJid}@g.us`) : chatJid;
+    await saveSetting('CALLERS_GROUP_JID', targetJid, 'Callers Team Group JID');
+    const sent = await sock.sendMessage(chatJid, { text: `✅ Callers Team Group set to \`${targetJid}\`.` });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+    return;
+  }
+  if (trimmedLower.startsWith('#set_poll_control') && isFullAuthority(senderJid)) {
+    const argJid = text.trim().split(/\s+/)[1]?.replace(/[.,;]+$/, '') || '';
+    const targetJid = argJid ? (argJid.includes('@') ? argJid : `${argJid}@g.us`) : chatJid;
+    await saveSetting('POLL_CONTROL_JID', targetJid, 'Poll Control Group JID');
+    try { const q = require('./quiz'); if (q.setPollControlJid) await q.setPollControlJid(targetJid); } catch {}
+    const sent = await sock.sendMessage(chatJid, { text: `✅ Poll Control Group set to \`${targetJid}\`.` });
     if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
     return;
   }
@@ -381,6 +396,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
 
   if (cmd === '#sync') {
     await loadMasterState();
+    await quiz.initQuizModule?.().catch(console.error);
     return sendControlMsg('✅ Reloaded Master Sheet data.');
   }
 
@@ -445,6 +461,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     if (rowIdx < 0) return sendControlMsg(`Bind key \`${bindKey}\` not found in Group_Bindings.`);
     await google.updateRange(MASTER_SHEET_ID, `Group_Bindings!C${rowIdx + 2}:D${rowIdx + 2}`, [[target.subject, target.id]]);
     await loadMasterState();
+    await quiz.initQuizModule?.().catch(console.error);
     return sendControlMsg(`✅ Bound *${target.subject}* to \`${bindKey}\`.`);
   }
 
@@ -463,6 +480,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
         await google.appendRow(MASTER_SHEET_ID, 'Admin_Permissions', [phone, phone, role, 'CONTROL', cats]);
       }
       await loadMasterState();
+    await quiz.initQuizModule?.().catch(console.error);
       return sendControlMsg(`✅ Saved +${phone} as *${role}*${cats ? ` (${cats})` : ''}.`);
     }
     if (sub === 'remove' && phone) {
@@ -471,6 +489,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
       if (idx >= 0) {
         await google.updateRange(MASTER_SHEET_ID, `Admin_Permissions!A${idx + 2}:E${idx + 2}`, [['', '', '', '', '']]);
         await loadMasterState();
+    await quiz.initQuizModule?.().catch(console.error);
       }
       return sendControlMsg(`🗑️ Removed +${phone}.`);
     }
@@ -622,6 +641,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     const newVer = maxVer + 1;
     await google.appendRow(MASTER_SHEET_ID, 'Templates', [nickname, body, String(newVer), 'ACTIVE', formatISTTimestamp()]);
     await loadMasterState();
+    await quiz.initQuizModule?.().catch(console.error);
     return sendControlMsg(`💾 Saved *${nickname}* (v${newVer} ACTIVE${maxVer ? `, v${maxVer} kept as OLD` : ''}).`);
   }
 
@@ -654,6 +674,7 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     const padded = [...kept, ...Array(Math.max(0, rows.length - kept.length)).fill(Array(5).fill(''))];
     if (rows.length) await google.updateRange(MASTER_SHEET_ID, `Templates!A2:E${rows.length + 1}`, padded, 'RAW');
     await loadMasterState();
+    await quiz.initQuizModule?.().catch(console.error);
     return sendControlMsg(`🗑️ Deleted ${onlyOld ? 'old versions of ' : ''}*${nickname}*.`);
   }
 

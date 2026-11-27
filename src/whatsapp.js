@@ -15,6 +15,7 @@ const { AUTH_DIR, normalizePhone } = require('./config');
 const google = require('./google');
 const { state } = require('./state');
 const { processIncomingMessage } = require('./commands');
+const quiz = require('./quiz');
 const gita = require('./categories/gitaAttendance');
 const memberTracker = require('./memberTracker');
 const quiz = require('./quiz');
@@ -193,7 +194,7 @@ async function startWhatsApp() {
           }
         } catch {}
         await sendControlMsg('🔄 Bot is online and monitoring.').catch(() => {});
-        const pollCtrl = quiz.getPollControlJid();
+        const pollCtrl = quiz.getPollControlJid?.();
         if (pollCtrl && pollCtrl !== 'SIM_POLL_CONTROL@g.us') await sendGroupText(pollCtrl, '🔄 Quiz Pipeline Bot is online and monitoring.').catch(() => {});
       }, 3000);
       setTimeout(() => memberTracker.syncOfflineChanges(sock).catch(console.error), 8000);

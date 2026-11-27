@@ -8,6 +8,7 @@ const gita = require('./categories/gitaAttendance');
 const dailyPosts = require('./categories/dailyPosts');
 const reminders = require('./reminders');
 const memberTracker = require('./memberTracker');
+const quiz = require('./quiz');
 const outreachMaster = require('./outreachMaster');
 const { processIncomingMessage } = require('./commands');
 const quiz = require('./quiz');
@@ -236,7 +237,7 @@ async function main() {
   app.listen(PORT, () => console.log(`[HTTP] Listening on port ${PORT}`));
   try {
     await loadMasterState();
-    await quiz.initQuizModule().catch(console.error);
+    await quiz.initQuizModule?.().catch(console.error);
   } catch (err) {
     console.log('[Startup State Error]', err.stack || err.message);
   }
