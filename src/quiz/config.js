@@ -1,6 +1,6 @@
 const path = require('path');
 
-const MASTER_SHEET_ID = process.env.MASTER_SHEET_ID || '1xT-fNx-Ikq5oenGaB98Fpo4AncL6rbjVdr5d_RvhVRg';
+const MASTER_SHEET_ID = process.env.QUIZ_MASTER_SHEET_ID || '1xT-fNx-Ikq5oenGaB98Fpo4AncL6rbjVdr5d_RvhVRg';
 
 const TABS = [
   'Post_Pipeline',
