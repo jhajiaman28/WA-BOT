@@ -88,8 +88,11 @@ async function loadDirectorySources(force = false) {
       const rows = await google.getRows(sid, tabRange);
       for (const row of rows) {
         const rawName = (row[0] || '').trim();
-        const rawPhone = (row[1] || '').trim();
-        const p10 = last10(rawPhone);
+        let p10 = '';
+        for (let ci = 1; ci < row.length; ci++) {
+          const cand = last10(row[ci] || '');
+          if (cand) { p10 = cand; break; }
+        }
         if (!p10) continue;
         const prev = map.get(p10) || { name: '', source: srcName };
         map.set(p10, {
