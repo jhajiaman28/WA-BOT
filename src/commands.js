@@ -5,6 +5,7 @@ const gita = require('./categories/gitaAttendance');
 const reminders = require('./reminders');
 const groupBroadcast = require('./groupBroadcast');
 const memberTracker = require('./memberTracker');
+const outreachMaster = require('./outreachMaster');
 const dailyPosts = require('./categories/dailyPosts');
 const { generateTauntOption, handleAIConversation } = require('./ai');
 
@@ -15,6 +16,12 @@ const HELP_TEXT = `*BOT COMMANDS*
 • \`#daily / #weekly [test] [DD/MM/YY]\` — Attendance report
 • \`#study / #vidya [test] [DD/MM/YY]\` — Study Tracker / Vidya poll
 • \`#sync_votes\` — Re-check & fix sheet votes
+
+*Outreach & Callers*
+• \`#set_outreach_control\` / \`#set_callers_group\` — Bind outreach groups
+• \`#outreach_sync\` / \`#outreach_assign\` / \`#outreach_poll\`
+• \`#outreach_clean_exits [all|name]\` / \`#outreach_cap <n>\`
+• \`#outreach_event <name|clear>\` / \`#outreach_report\`
 
 *DMs, Reminders & Saved Messages*
 • \`#dm_group <keyword>\` — Fetch group members & DM with exclusions
@@ -236,14 +243,35 @@ async function handleQuoteReply({ quotedId, replyText, sendControlMsg, enqueuePo
   return false;
 }
 
-async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg }) {
+async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg, sendGroupMentionText }) {
   const controlJid = state.settings.CONTROL_GROUP_JID;
-  const isControlGroup = controlJid && chatJid === controlJid;
+  const outreachControlJid = outreachMaster.getOutreachControlJid();
+  const callersGroupJid = outreachMaster.getCallersGroupJid();
+  const isOutreachControl = outreachControlJid && chatJid === outreachControlJid;
+  const isCallersGroup = callersGroupJid && chatJid === callersGroupJid;
+  const isControlGroup = (controlJid && chatJid === controlJid) || isOutreachControl;
   const isCommand = text.trim().startsWith('#');
 
   if (isControlGroup && quotedId && isAuthorized(senderJid, 'CONTROL')) {
     const handled = await handleQuoteReply({ quotedId, replyText: text, sendControlMsg, enqueuePoll, sendDM, editControlMsg, deleteControlMsg });
     if (handled) return;
+  }
+
+  if (text.trim().toLowerCase() === '#set_outreach_control' && isFullAuthority(senderJid)) {
+    await saveSetting('OUTREACH_CONTROL_JID', chatJid, 'Dedicated Outreach Control Group JID');
+    const sent = await sock.sendMessage(chatJid, { text: `✅ Outreach Control Group set to \`${chatJid}\`.` });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+    return;
+  }
+  if (text.trim().toLowerCase() === '#set_callers_group' && isFullAuthority(senderJid)) {
+    await saveSetting('CALLERS_GROUP_JID', chatJid, 'Callers Team Group JID');
+    const sent = await sock.sendMessage(chatJid, { text: `✅ Callers Team Group set to \`${chatJid}\`.` });
+    if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+    return;
+  }
+  if (isCallersGroup && text.trim().toLowerCase() === '#unavailable') {
+    await outreachMaster.handleCallerUnavailable({ senderJid, sendGroupMentionText, sendNotice: (t) => sock.sendMessage(outreachMaster.getOutreachControlJid(), { text: t }) });
+    return;
   }
 
   if (text.trim().toLowerCase() === '#set_control_group' && isFullAuthority(senderJid)) {
@@ -309,8 +337,6 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
     state.pendingPrompts.clear();
     return sendControlMsg(`⏹️ Cancelled active job/prompts (cleared ${cleared} pending prompt(s)).`);
   }
-
-
 
   if (cmd === '#sync') {
     await loadMasterState();
@@ -620,6 +646,49 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
 
   if (cmd === '#untrack_members' && fullAuth) {
     await memberTracker.untrackGroup({ query: args.join(' '), sendControlMsg });
+    return;
+  }
+
+  if (cmd === '#outreach_sync' && fullAuth) {
+    const res = await outreachMaster.syncMasterOutreach({ forceDir: true, sendNotice: (t) => sock.sendMessage(chatJid, { text: t }) });
+    return sock.sendMessage(chatJid, { text: `✅ Outreach Master synced: *${res.total}* total active contacts (+${res.added} new).` });
+  }
+
+  if (cmd === '#outreach_assign' && fullAuth) {
+    await outreachMaster.assignDailyCalls({ sendGroupMentionText, sendNotice: (t) => sock.sendMessage(chatJid, { text: t }) });
+    return;
+  }
+
+  if (cmd === '#outreach_poll' && fullAuth) {
+    await outreachMaster.sendWeeklyAvailabilityPoll({ sendPoll, sendNotice: (t) => sock.sendMessage(chatJid, { text: t }) });
+    return;
+  }
+
+  if (cmd === '#outreach_clean_exits' && fullAuth) {
+    await outreachMaster.cleanExitedMembers({ target: args.join(' ') || 'all', sendNotice: (t) => sock.sendMessage(chatJid, { text: t }) });
+    return;
+  }
+
+  if (cmd === '#outreach_cap' && fullAuth) {
+    const cap = parseInt(args[0], 10);
+    if (!cap || cap < 1) return sock.sendMessage(chatJid, { text: 'Usage: `#outreach_cap <number>`' });
+    await saveSetting('OUTREACH_DAILY_CAP', String(cap), 'Default daily calls per caller');
+    return sock.sendMessage(chatJid, { text: `✅ Outreach daily call cap set to *${cap}*.` });
+  }
+
+  if (cmd === '#outreach_event' && fullAuth) {
+    const ev = args.join(' ').trim();
+    if (!ev || ev.toLowerCase() === 'clear') {
+      await saveSetting('OUTREACH_ACTIVE_EVENT', '');
+      return sock.sendMessage(chatJid, { text: '⏹️ Cleared active outreach event.' });
+    }
+    await saveSetting('OUTREACH_ACTIVE_EVENT', ev);
+    await saveSetting('OUTREACH_ACTIVE_EVENT_EXPIRES', String(Date.now() + 6 * 86400000));
+    return sock.sendMessage(chatJid, { text: `🏷️ Active outreach event set to *${ev}* (auto-expires in 6 days).` });
+  }
+
+  if (cmd === '#outreach_report' && fullAuth) {
+    await outreachMaster.syncFormResponsesAndReport({ sendNotice: (t) => sock.sendMessage(chatJid, { text: t }), sendReport: true });
     return;
   }
 

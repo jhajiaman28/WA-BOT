@@ -32,7 +32,7 @@ async function loadMasterState() {
     google.getRows(MASTER_SHEET_ID, 'Custom_Schedules!A2:F').catch(() => []),
     google.getRows(MASTER_SHEET_ID, 'Templates!A2:E').catch(() => []),
     google.getRows(MASTER_SHEET_ID, 'Gita_Vote_Logs!A2:F').catch(() => []),
-    google.getRows(MASTER_SHEET_ID, 'Tracked_Groups!A2:G').catch(() => []),
+    google.getRows(MASTER_SHEET_ID, 'Tracked_Groups!A2:I').catch(() => []),
   ]);
 
   state.settings = {};
@@ -116,6 +116,9 @@ async function loadMasterState() {
     sheetUrl: (r[3] || '').trim(),
     createdAt: (r[4] || '').trim(),
     status: (r[5] || 'ACTIVE').trim().toUpperCase(),
+    notifyControl: String(r[6] || '').toUpperCase() === 'TRUE',
+    includeInOutreach: String(r[7] || 'TRUE').toUpperCase() !== 'FALSE',
+    activeEvent: (r[8] || '').trim(),
   }));
 
   state.voteCache.clear();
@@ -216,7 +219,6 @@ function pushChatHistory(chatJid, role, text) {
   if (hist.length > 16) hist.shift();
   state.chatHistory.set(chatJid, hist);
 }
-
 
 function isPaused(categoryKey) {
   if (state.settings.EMERGENCY_STOP === 'TRUE') return true;

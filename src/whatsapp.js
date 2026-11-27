@@ -17,6 +17,7 @@ const { state } = require('./state');
 const { processIncomingMessage } = require('./commands');
 const gita = require('./categories/gitaAttendance');
 const memberTracker = require('./memberTracker');
+const outreachMaster = require('./outreachMaster');
 
 let sock = null;
 let latestQRDataUrl = null;
@@ -41,6 +42,13 @@ async function runDispatchQueue() {
     }
   }
   dispatching = false;
+}
+
+async function sendGroupMentionText(groupJid, text, mentions = []) {
+  if (!sock || !groupJid) return null;
+  const sent = await sock.sendMessage(groupJid, { text, mentions });
+  if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+  return sent;
 }
 
 async function sendGroupText(groupJid, text) {
@@ -228,6 +236,11 @@ async function startWhatsApp() {
           if (state.settings.EMERGENCY_STOP === 'TRUE') continue;
           const pu = msg.message.pollUpdateMessage;
           const pollId = pu.pollCreationMessageKey?.id;
+          if (pollId && pollId === state.settings.OUTREACH_AVAIL_POLL_ID) {
+            const voterJid = jidNormalizedUser(msg.key.fromMe ? sock.user?.id : (msg.key.participant || msg.key.remoteJid));
+            await outreachMaster.handleAvailabilityVote({ voterJid, pushName: msg.pushName || '', selectedOptions: [] });
+            continue;
+          }
           const poll = state.activePolls.get(pollId);
           if (poll && poll.secret) {
             const { decrypted, voterJid } = tryDecryptVote(pu, msg, poll);
@@ -260,7 +273,7 @@ async function startWhatsApp() {
         const senderJid = jidNormalizedUser(msg.key.fromMe ? sock.user?.id : (msg.key.participant || chatJid));
         const quotedId = inner.extendedTextMessage?.contextInfo?.stanzaId || msg.message.extendedTextMessage?.contextInfo?.stanzaId || null;
 
-        await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg });
+        await processIncomingMessage({ sock, chatJid, senderJid, text, quotedId, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg, sendGroupMentionText });
       } catch (err) {
         console.error('[WA Message Error]', err);
         await sendControlMsg(`⚠️ Error: ${err.message}`).catch(() => {});
@@ -273,6 +286,26 @@ async function startWhatsApp() {
       try {
         if (update.pollUpdates) {
           if (state.settings.EMERGENCY_STOP === 'TRUE') continue;
+          if (key.id === state.settings.OUTREACH_AVAIL_POLL_ID) {
+            const pollMsg = messageStore.get(key.id);
+            const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+            const agg = getAggregateVotesInPollMessage({
+              message: pollMsg?.message || { pollCreationMessageV3: { options: days.map((o) => ({ optionName: o })) } },
+              pollUpdates: update.pollUpdates,
+            });
+            for (const u of update.pollUpdates) {
+              const rawVoter = u.pollUpdateMessageKey?.fromMe
+                ? sock.user?.id
+                : (u.pollUpdateMessageKey?.participant || u.pollUpdateMessageKey?.remoteJid);
+              const voterJid = jidNormalizedUser(rawVoter);
+              const voterPhone = normalizePhone(voterJid);
+              const pickedDays = agg.filter((a) =>
+                a.voters.some((v) => v === voterJid || (voterPhone && normalizePhone(v) === voterPhone))
+              ).map((a) => a.name);
+              await outreachMaster.handleAvailabilityVote({ voterJid, pushName: '', selectedOptions: pickedDays });
+            }
+            continue;
+          }
           const poll = state.activePolls.get(key.id);
           if (!poll) continue;
           const pollMsg = messageStore.get(key.id);
@@ -300,7 +333,7 @@ async function startWhatsApp() {
           || update.message?.editedMessage?.message?.extendedTextMessage?.text;
         if (editedText && !state.sentMsgIds.has(key.id)) {
           const senderJid = jidNormalizedUser(key.fromMe ? sock.user?.id : (key.participant || key.remoteJid));
-          await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg });
+          await processIncomingMessage({ sock, chatJid: key.remoteJid, senderJid, text: editedText, quotedId: null, sendControlMsg, sendPoll, enqueuePoll, sendDM, editControlMsg, deleteControlMsg, sendGroupMentionText });
         }
       } catch (err) {
         console.error('[WA Update Error]', err);
@@ -313,6 +346,7 @@ async function startWhatsApp() {
     try {
       if (state.settings.EMERGENCY_STOP !== 'TRUE') {
         await memberTracker.handleParticipantEvent({ groupJid: id, participants, action, sendControlMsg, sock });
+        await outreachMaster.checkKeywordGroupDiscovery({ sock, groupJid: id, sendNotice: (t) => sendGroupText(outreachMaster.getOutreachControlJid(), t) });
       }
       const binding = state.bindings.find((b) => b.groupJid === id && b.trackJoins);
       if (!binding) return;
@@ -355,7 +389,6 @@ async function startWhatsApp() {
   });
 }
 
-
 function stopWhatsApp() {
   isConnected = false;
   try { sock?.ev?.removeAllListeners(); } catch {}
@@ -366,6 +399,7 @@ module.exports = {
   startWhatsApp,
   stopWhatsApp,
   sendGroupText,
+  sendGroupMentionText,
   sendControlMsg,
   editControlMsg,
   deleteControlMsg,

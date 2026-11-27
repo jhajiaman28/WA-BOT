@@ -3,11 +3,12 @@ const cron = require('node-cron');
 const { PORT, TZ, MASTER_SHEET_ID, getISTNow, formatISTDate } = require('./config');
 const google = require('./google');
 const { state, loadMasterState, saveSetting, isPaused } = require('./state');
-const { startWhatsApp, stopWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus, sendGroupText, sendDM, editControlMsg } = require('./whatsapp');
+const { startWhatsApp, stopWhatsApp, sendControlMsg, sendPoll, enqueuePoll, getStatus, sendGroupText, sendGroupMentionText, sendDM, editControlMsg } = require('./whatsapp');
 const gita = require('./categories/gitaAttendance');
 const dailyPosts = require('./categories/dailyPosts');
 const reminders = require('./reminders');
 const memberTracker = require('./memberTracker');
+const outreachMaster = require('./outreachMaster');
 const { processIncomingMessage } = require('./commands');
 const { generateTauntOption } = require('./ai');
 
@@ -31,7 +32,6 @@ async function recoverMissedDispatches() {
   const today = formatISTDate(now);
   const mins = now.getHours() * 60 + now.getMinutes();
 
-  // 10:00 AM Daily Report
   if (mins >= 605 && !isPaused('gita_attendance') && state.settings.LAST_SENT_daily_report !== today) {
     const b = state.bindings.find((x) => x.bindKey === 'gita_attendance');
     if (b?.groupJid) {
@@ -44,7 +44,6 @@ async function recoverMissedDispatches() {
     }
   }
 
-  // Monday 2:00 PM Weekly Report
   if (now.getDay() === 1 && mins >= 845 && !isPaused('gita_attendance') && state.settings.LAST_SENT_weekly_report !== today) {
     const b = state.bindings.find((x) => x.bindKey === 'gita_attendance');
     if (b?.groupJid) {
@@ -57,10 +56,8 @@ async function recoverMissedDispatches() {
     }
   }
 
-  // 6:00 PM Vidya-Avidya Poll
   if (mins >= 1085 && !isPaused('vidya_avidya') && state.settings.LAST_SENT_vidya_avidya !== today) {
-    await saveSetting('LAST_SENT_vidya_avidya', formatISTDate());
-      const vidyaBindings = state.bindings.filter((b) => (b.bindKey === 'vidya_avidya' || b.category === 'vidya_avidya') && b.groupJid);
+    const vidyaBindings = state.bindings.filter((b) => (b.bindKey === 'vidya_avidya' || b.category === 'vidya_avidya') && b.groupJid);
     if (vidyaBindings.length) {
       await saveSetting('LAST_SENT_vidya_avidya', today);
       const payload = dailyPosts.buildVidyaPollPayload();
@@ -73,7 +70,6 @@ async function recoverMissedDispatches() {
     }
   }
 
-  // 10:00 PM Gita Attendance Poll
   if (mins >= 1325 && !isPaused('gita_attendance') && !state.dailySentFlags.has(`gita_attendance:${today}`)) {
     const b = state.bindings.find((x) => x.bindKey === 'gita_attendance');
     if (b?.groupJid) {
@@ -86,7 +82,6 @@ async function recoverMissedDispatches() {
 }
 
 function setupCrons() {
-  // 6:00 AM IST Daily Health Report
   cron.schedule('0 6 * * *', async () => {
     const { isConnected } = getStatus();
     const paused = state.settings.SCHEDULE_PAUSED === 'TRUE' ? 'PAUSED' : 'ACTIVE';
@@ -95,14 +90,12 @@ function setupCrons() {
     );
   }, { timezone: TZ });
 
-  // 9:00 PM IST Session Name Confirmation
   cron.schedule('0 21 * * *', async () => {
     if (isPaused('gita_attendance')) return;
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
     if (binding?.groupJid) await gita.askSessionConfirmation(sendControlMsg, binding);
   }, { timezone: TZ });
 
-  // 10:00 PM IST Gita Attendance Poll Auto-Dispatch
   cron.schedule('0 22 * * *', async () => {
     if (isPaused('gita_attendance')) return;
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
@@ -120,7 +113,6 @@ function setupCrons() {
     }));
   }, { timezone: TZ });
 
-  // 10:00 AM IST Daily Report (for yesterday)
   cron.schedule('0 10 * * *', async () => {
     if (isPaused('gita_attendance')) return;
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
@@ -130,7 +122,6 @@ function setupCrons() {
     if (res.text) await sendGroupText(binding.groupJid, res.text);
   }, { timezone: TZ });
 
-  // Monday 2:00 PM IST Weekly Report (for previous Mon-Sun week)
   cron.schedule('0 14 * * 1', async () => {
     if (isPaused('gita_attendance')) return;
     const binding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
@@ -140,7 +131,6 @@ function setupCrons() {
     if (res.text) await sendGroupText(binding.groupJid, res.text);
   }, { timezone: TZ });
 
-  // 12:00 AM IST Study Tracker Post (for previous day)
   cron.schedule('0 0 * * *', async () => {
     if (isPaused('study_tracker')) return;
     const bindings = state.bindings.filter((b) => (b.bindKey === 'study_tracker' || b.category === 'study_tracker') && b.groupJid);
@@ -152,14 +142,12 @@ function setupCrons() {
     }
   }, { timezone: TZ });
 
-  // 9:30 AM IST Gita Inactive Reminder Check
   cron.schedule('30 9 * * *', async () => {
     if (isPaused('gita_reminders')) return;
     const gitaBinding = state.bindings.find((b) => b.bindKey === 'gita_attendance');
     if (gitaBinding?.targetSheetId) await reminders.runDailyReminderCheck({ sendControlMsg, binding: gitaBinding });
   }, { timezone: TZ });
 
-  // 6:00 PM IST Vidya-Avidya Poll
   cron.schedule('0 18 * * *', async () => {
     if (isPaused('vidya_avidya')) return;
     const vidyaBindings = state.bindings.filter((b) => (b.bindKey === 'vidya_avidya' || b.category === 'vidya_avidya') && b.groupJid);
@@ -172,12 +160,28 @@ function setupCrons() {
     }
   }, { timezone: TZ });
 
-  // 3:00 AM IST Auto-prune logs older than retention days
   cron.schedule('0 3 * * *', async () => {
     await gita.pruneOldLogs();
   }, { timezone: TZ });
 
-  // 1-Minute Custom Schedule Ticker
+  // Outreach Monday 8:00 AM IST Weekly Availability Poll
+  cron.schedule('0 8 * * 1', async () => {
+    if (isPaused('outreach')) return;
+    await outreachMaster.sendWeeklyAvailabilityPoll({ sendPoll, sendNotice: (t) => sendGroupText(outreachMaster.getOutreachControlJid(), t) });
+  }, { timezone: TZ });
+
+  // Outreach Daily 10:05 AM IST Call Assignment
+  cron.schedule('5 10 * * *', async () => {
+    if (isPaused('outreach')) return;
+    await outreachMaster.assignDailyCalls({ sendGroupMentionText, sendNotice: (t) => sendGroupText(outreachMaster.getOutreachControlJid(), t) });
+  }, { timezone: TZ });
+
+  // Outreach Daily 9:45 PM IST Form Sync & Accountability Report
+  cron.schedule('45 21 * * *', async () => {
+    if (isPaused('outreach')) return;
+    await outreachMaster.syncFormResponsesAndReport({ sendNotice: (t) => sendGroupText(outreachMaster.getOutreachControlJid(), t), sendReport: true });
+  }, { timezone: TZ });
+
   cron.schedule('* * * * *', async () => {
     if (!state.customSchedules.length) return;
     const now = getISTNow();
@@ -218,10 +222,12 @@ function setupCrons() {
     }
   }, { timezone: TZ });
 
-  // Background member tracker name/phone backfill every 30 minutes
-  setInterval(() => memberTracker.syncOfflineChanges(require('./whatsapp').getSock?.()).catch(() => {}), 1800000);
+  setInterval(() => {
+    const s = require('./whatsapp').getSock?.();
+    memberTracker.syncOfflineChanges(s).catch(() => {});
+    outreachMaster.syncFormResponsesAndReport({ sendNotice: null, sendReport: false }).catch(() => {});
+  }, 1800000);
 
-  // Retry queue flush every 2 minutes
   setInterval(() => google.processRetryQueue(sendControlMsg).catch(console.error), 120000);
 }
 
