@@ -25,7 +25,7 @@ async function handleIncoming({ sock, chatJid, senderJid, text, globalEmergencyS
   if (!initialized) await initQuizModule();
 
   const trimmed = (text || '').trim();
-  const isSetCmd = trimmed.toLowerCase() === '#set_poll_control';
+  const isSetCmd = /^#set_poll_control(\s|$)/i.test(trimmed);
   const pollControlJid = getPollControlJid();
 
   if (!isSetCmd && chatJid !== pollControlJid) {

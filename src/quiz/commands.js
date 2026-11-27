@@ -57,8 +57,9 @@ async function handlePollControlMessage({ remoteJid, senderJid, text, sheets, pe
   if (cmd === '#set_poll_control') {
     const perm = permissions.isAllowed(senderJid, cmd, 'POLL_CTRL');
     if (!perm.allowed) return { reply: `⛔ ${perm.reason}` };
-    await sheets.setSetting('POLL_CONTROL_JID', remoteJid);
-    return { reply: `✅ Bound \`${remoteJid}\` as *Poll Control Group*.` };
+    const targetJid = parts[1] && parts[1].includes('@g.us') ? parts[1].trim() : remoteJid;
+    await sheets.setSetting('POLL_CONTROL_JID', targetJid);
+    return { reply: `✅ Bound \`${targetJid}\` as *Poll Control Group*.` };
   }
 
   if (remoteJid !== settings.POLL_CONTROL_JID) {
