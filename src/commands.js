@@ -9,6 +9,26 @@ const outreachMaster = require('./outreachMaster');
 const dailyPosts = require('./categories/dailyPosts');
 const { generateTauntOption, handleAIConversation } = require('./ai');
 
+const OUTREACH_HELP_TEXT = `*OUTREACH BOT COMMANDS*
+
+*Setup & Groups*
+• \`#set_outreach_control\` — Set this group as Outreach Control
+• \`#set_callers_group\` — Set Callers Team group
+• \`#track_members <group> [sheetURL]\` / \`#untrack_members <group>\`
+• \`#track_notify <group> <on|off>\` — Toggle entry/exit alerts
+
+*Sync, Assignment & Exits*
+• \`#outreach_sync\` — Sync tracked groups + Directory_Sources to Master
+• \`#outreach_poll\` — Post Weekly Availability Poll in Callers group
+• \`#outreach_assign\` — Assign Today's Calls & tag callers
+• \`#outreach_clean_exits [all|name]\` — Move Exited rows to Exit_List
+• \`#outreach_cap <n>\` — Set daily call cap per caller
+• \`#outreach_event <name|clear>\` — Set 6-day active event tag
+• \`#outreach_report\` — Sync Form responses & view daily report
+
+*System*
+• \`#status\` / \`#sync\` / \`#cancel\` / \`#kill\` / \`#wake\``;
+
 const HELP_TEXT = `*BOT COMMANDS*
 
 *Polls, Posts & Reports*
@@ -16,12 +36,6 @@ const HELP_TEXT = `*BOT COMMANDS*
 • \`#daily / #weekly [test] [DD/MM/YY]\` — Attendance report
 • \`#study / #vidya [test] [DD/MM/YY]\` — Study Tracker / Vidya poll
 • \`#sync_votes\` — Re-check & fix sheet votes
-
-*Outreach & Callers*
-• \`#set_outreach_control\` / \`#set_callers_group\` — Bind outreach groups
-• \`#outreach_sync\` / \`#outreach_assign\` / \`#outreach_poll\`
-• \`#outreach_clean_exits [all|name]\` / \`#outreach_cap <n>\`
-• \`#outreach_event <name|clear>\` / \`#outreach_report\`
 
 *DMs, Reminders & Saved Messages*
 • \`#dm_group <keyword>\` — Fetch group members & DM with exclusions
@@ -251,6 +265,26 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
   const isCallersGroup = callersGroupJid && chatJid === callersGroupJid;
   const isControlGroup = (controlJid && chatJid === controlJid) || isOutreachControl;
   const isCommand = text.trim().startsWith('#');
+  const origSendControl = sendControlMsg;
+  if (isOutreachControl && chatJid !== controlJid) {
+    sendControlMsg = async (msgText) => {
+      const sent = await sock.sendMessage(chatJid, { text: msgText });
+      if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+      return sent;
+    };
+    editControlMsg = async (msgKey, newText) => {
+      try {
+        await sock.sendMessage(chatJid, { text: newText, edit: msgKey });
+        return true;
+      } catch { return false; }
+    };
+    deleteControlMsg = async (msgKey) => {
+      try {
+        await sock.sendMessage(chatJid, { delete: msgKey });
+        return true;
+      } catch { return false; }
+    };
+  }
 
   if (isControlGroup && quotedId && isAuthorized(senderJid, 'CONTROL')) {
     const handled = await handleQuoteReply({ quotedId, replyText: text, sendControlMsg, enqueuePoll, sendDM, editControlMsg, deleteControlMsg });
@@ -303,7 +337,14 @@ async function processIncomingMessage({ sock, chatJid, senderJid, text, quotedId
   const args = parts.slice(1);
   const fullAuth = isFullAuthority(senderJid);
 
-  if (cmd === '#help') return sendControlMsg(HELP_TEXT);
+  if (cmd === '#help') {
+    if (isOutreachControl) {
+      const sent = await sock.sendMessage(chatJid, { text: OUTREACH_HELP_TEXT });
+      if (sent?.key?.id) state.sentMsgIds.add(sent.key.id);
+      return;
+    }
+    return sendControlMsg(HELP_TEXT);
+  }
 
   if (cmd === '#status') {
     const emergency = state.settings.EMERGENCY_STOP === 'TRUE';
